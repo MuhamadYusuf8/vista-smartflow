@@ -25,10 +25,11 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const formattedCameras = cameras.map((camera) => ({
+    // KODE BARU
+    const formattedCameras = cameras.map((camera: { _count: { violations: number }; [key: string]: any }) => ({
       ...camera,
       violationsToday: camera._count.violations,
-      uptime: 99.9, // Mock value, in real app would track ping/status logs
+      uptime: 99.9,
     }));
 
     return NextResponse.json(formattedCameras);
