@@ -27,11 +27,11 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Explicitly typing the map parameter 'v' to avoid implicit any
-    const points = violations.map((v: { lat: number; lng: number }) => ({
+    // KODE BARU
+    const points = violations.map((v: { lat: number; lng: number; [key: string]: any }) => ({
       lat: v.lat,
       lng: v.lng,
-      intensity: Math.random() * 0.5 + 0.5 // Random intensity 0.5-1.0
+      intensity: Math.random() * 0.5 + 0.5
     }));
 
     return NextResponse.json({ points });
