@@ -1,0 +1,26 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: smartflow
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://postgres:password@db:5432/smartflow
+      NEXTAUTH_SECRET: vista-smartflow-super-secret-key-2026
+      NEXTAUTH_URL: http://localhost:3000
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

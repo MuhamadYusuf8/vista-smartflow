@@ -1,0 +1,102 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(OFFICER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum Role {
+  ADMIN
+  OFFICER
+  VIEWER
+}
+
+model Camera {
+  id         String       @id @default(cuid())
+  name       String
+  location   String
+  lat        Float
+  lng        Float
+  status     CameraStatus @default(ACTIVE)
+  streamUrl  String?
+  violations Violation[]
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+}
+
+enum CameraStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+}
+
+model Violation {
+  id           String          @id @default(cuid())
+  cameraId     String
+  camera       Camera          @relation(fields: [cameraId], references: [id])
+  type         ViolationType
+  licensePlate String
+  vehicleType  VehicleType
+  confidence   Float
+  duration     Int?
+  evidenceUrl  String
+  location     String
+  lat          Float
+  lng          Float
+  status       ViolationStatus @default(PENDING)
+  timestamp    DateTime        @default(now())
+  processedAt  DateTime?
+  etleRef      String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+}
+
+enum ViolationType {
+  ILLEGAL_PARKING
+  BUSWAY_VIOLATION
+  BICYCLE_LANE_VIOLATION
+  BUS_STOP_VIOLATION
+  WRONG_LANE
+}
+
+enum VehicleType {
+  CAR
+  MOTORCYCLE
+  BUS
+  TRUCK
+  OTHER
+}
+
+enum ViolationStatus {
+  PENDING
+  VERIFIED
+  EXPORTED
+  DISMISSED
+}
+
+model HeatmapData {
+  id        String         @id @default(cuid())
+  lat       Float
+  lng       Float
+  intensity Float
+  date      DateTime       @default(now())
+  type      ViolationType?
+}
+
+model SystemLog {
+  id        String   @id @default(cuid())
+  event     String
+  details   String?
+  createdAt DateTime @default(now())
+}
