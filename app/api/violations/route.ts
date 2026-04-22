@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
-import { ViolationType, ViolationStatus } from "@prisma/client";
+import { ViolationType, ViolationStatus, Prisma } from "@prisma/client";
 
 const querySchema = z.object({
   page: z.string().optional().transform(val => (val ? parseInt(val) : 1)),
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
 
     const skip = (query.page - 1) * query.limit;
 
-    const where: any = {};
+    const where: Prisma.ViolationWhereInput = {};
     if (query.type) where.type = query.type;
     if (query.status) where.status = query.status;
     if (query.cameraId) where.cameraId = query.cameraId;

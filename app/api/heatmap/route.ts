@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,12 +11,12 @@ export async function GET(req: NextRequest) {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const where: any = {
+    const where: Prisma.ViolationWhereInput = {
       timestamp: { gte: startDate }
     };
 
     if (type) {
-      where.type = type;
+      where.type = type as any; // Cast safely for query param
     }
 
     const violations = await prisma.violation.findMany({
@@ -26,9 +27,8 @@ export async function GET(req: NextRequest) {
       }
     });
 
-    // Reduce points that are exactly the same (mocking heat intensity)
-    // In a real scenario, Leaflet Heat handles overlapping points automatically
-    const points = violations.map(v => ({
+    // Explicitly typing the map parameter 'v' to avoid implicit any
+    const points = violations.map((v: { lat: number; lng: number }) => ({
       lat: v.lat,
       lng: v.lng,
       intensity: Math.random() * 0.5 + 0.5 // Random intensity 0.5-1.0

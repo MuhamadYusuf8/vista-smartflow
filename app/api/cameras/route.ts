@@ -25,8 +25,18 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    // KODE BARU
-    const formattedCameras = cameras.map((camera: { _count: { violations: number }; [key: string]: any }) => ({
+    interface CameraWithCount {
+      id: string;
+      name: string;
+      location: string;
+      status: string;
+      _count: {
+        violations: number;
+      };
+      [key: string]: any;
+    }
+
+    const formattedCameras = (cameras as unknown as CameraWithCount[]).map((camera) => ({
       ...camera,
       violationsToday: camera._count.violations,
       uptime: 99.9,
