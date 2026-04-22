@@ -5,11 +5,13 @@ import { ViolationStatus } from "@prisma/client";
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> } // 1. Ubah tipe menjadi Promise
 ) {
   try {
+    const resolvedParams = await params; // 2. Await params-nya
+
     const violation = await prisma.violation.findUnique({
-      where: { id: params.id },
+      where: { id: resolvedParams.id }, // 3. Gunakan id yang sudah di-await
       include: {
         camera: true,
       },
@@ -31,14 +33,15 @@ const updateSchema = z.object({
 
 export async function PATCH(
   req: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> } // 1. Ubah tipe menjadi Promise
 ) {
   try {
+    const resolvedParams = await params; // 2. Await params-nya
     const body = await req.json();
     const { status } = updateSchema.parse(body);
 
     const violation = await prisma.violation.update({
-      where: { id: params.id },
+      where: { id: resolvedParams.id }, // 3. Gunakan id yang sudah di-await
       data: { 
         status,
         processedAt: status !== "PENDING" ? new Date() : null,

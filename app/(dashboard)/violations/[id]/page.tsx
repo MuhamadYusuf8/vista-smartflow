@@ -24,8 +24,9 @@ const mockDetail = {
   evidenceUrl: "https://picsum.photos/seed/jakarta/1200/800"
 };
 
-export default function ViolationDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = use(params);
+export default async function ViolationDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const resolvedParams = await params;
+  const id = resolvedParams.id;
 
   return (
     <div className="space-y-6">
