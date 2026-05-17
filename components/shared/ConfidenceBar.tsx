@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { cn } from "@/lib/utils";
 
 interface ConfidenceBarProps {
@@ -9,7 +8,7 @@ interface ConfidenceBarProps {
 
 export function ConfidenceBar({ confidence, showLabel = true, className }: ConfidenceBarProps) {
   // Normalize confidence to 0-100 percentage
-  const percentage = confidence <= 1 ? useMemo(() => Math.round(confidence * 100), [confidence]) : confidence;
+  const percentage = confidence <= 1 ? Math.round(confidence * 100) : confidence;
 
   let colorClass = "bg-accent-red";
   if (percentage >= 90) colorClass = "bg-accent-green";

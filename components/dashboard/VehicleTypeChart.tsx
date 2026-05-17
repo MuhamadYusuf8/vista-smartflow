@@ -9,8 +9,8 @@ interface VehicleTypeChartProps {
 
 export function VehicleTypeChart({ data }: VehicleTypeChartProps) {
   return (
-    <div className="h-full w-full min-h-[300px]">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="h-full w-full" style={{ minHeight: 300 }}>
+      <ResponsiveContainer width="100%" height={300}>
         <PieChart>
           <Pie
             data={data}

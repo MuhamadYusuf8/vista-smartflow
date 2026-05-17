@@ -7,7 +7,7 @@ interface LicensePlateProps {
   className?: string;
 }
 
-export function LicensePlate({ plate, type = "car", size = "md", className }: LicensePlateProps) {
+export function LicensePlate({ plate, size = "md", className }: LicensePlateProps) {
   // Indonesian format: B 1234 CD
   const parts = plate.split(" ");
   const prefix = parts[0] || "";

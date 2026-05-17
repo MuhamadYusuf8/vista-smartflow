@@ -15,12 +15,25 @@ interface ViolationChartProps {
   data: HourlyDataPoint[];
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface TooltipEntry {
+  color: string;
+  name: string;
+  value: number;
+  payload: { total: number };
+}
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: TooltipEntry[];
+  label?: string;
+}
+
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (active && payload && payload.length) {
     return (
       <div className="rounded-lg border border-border bg-bg-tertiary p-3 shadow-xl backdrop-blur-md">
         <p className="mb-2 font-medium text-white">{label}</p>
-        {payload.map((entry: any, index: number) => (
+        {payload.map((entry, index) => (
           <div key={index} className="flex flex-col gap-1">
             <span
               className="text-xs font-semibold uppercase"
@@ -43,8 +56,8 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export function ViolationChart({ data }: ViolationChartProps) {
   return (
-    <div className="h-full w-full min-h-[300px]">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="h-full w-full" style={{ minHeight: 300 }}>
+      <ResponsiveContainer width="100%" height={300}>
         <AreaChart
           data={data}
           margin={{ top: 10, right: 10, left: -20, bottom: 0 }}

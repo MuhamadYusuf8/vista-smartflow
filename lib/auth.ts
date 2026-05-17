@@ -46,19 +46,19 @@ export const authConfig: NextAuthConfig = {
           name: user.name,
           email: user.email,
           role: user.role,
-        } as any;
+        };
       },
     }),
   ],
   callbacks: {
-    async jwt({ token, user }: { token: any, user?: any }) {
+    async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
         token.role = user.role;
       }
       return token;
     },
-    async session({ session, token }: { session: any, token: any }) {
+    async session({ session, token }) {
       if (token) {
         session.user.id = token.id as string;
         session.user.role = token.role as string;

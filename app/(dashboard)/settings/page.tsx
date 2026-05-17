@@ -1,12 +1,14 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useState } from "react";
-import { Save, UserCog, Settings2, Sliders, Server, Layout } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Save, UserCog, Settings2, Sliders, Server, Layout, Video } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
 
 const tabs = [
   { id: "ai", name: "Sistem AI", icon: Sliders },
+  { id: "kamera", name: "Kamera", icon: Video },
   { id: "users", name: "Pengguna", icon: UserCog, adminOnly: true },
   { id: "etle", name: "Integrasi E-TLE", icon: Server },
   { id: "preferences", name: "Preferensi Tampilan", icon: Layout },
@@ -15,10 +17,29 @@ const tabs = [
 export default function SettingsPage() {
   const { data: session } = useSession();
   const userRole = session?.user?.role || "VIEWER";
-  
+
   const [activeTab, setActiveTab] = useState("ai");
   const [confidenceThreshold, setConfidenceThreshold] = useState(85);
   const [durationThreshold, setDurationThreshold] = useState(300);
+  const [telegramStatus, setTelegramStatus] = useState<{ configured: boolean; bot?: string } | null>(null);
+  const [cameras, setCameras] = useState<any[]>([]);
+
+  useEffect(() => {
+    fetch('/api/alert').then(r => r.json()).then(setTelegramStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "kamera" && cameras.length === 0) {
+      supabase.from("cameras").select("*").order("name").then(({ data }) => {
+        if (data) setCameras(data);
+      });
+    }
+  }, [activeTab]);
+
+  const updateStreamUrl = async (cameraId: string, url: string) => {
+    await supabase.from('cameras').update({ stream_url: url }).eq('id', cameraId);
+    setCameras(c => c.map(cam => cam.id === cameraId ? { ...cam, stream_url: url } : cam));
+  };
 
   const availableTabs = tabs.filter(t => !t.adminOnly || userRole === "ADMIN");
 
@@ -64,12 +85,12 @@ export default function SettingsPage() {
 
         {/* Content Area */}
         <div className="flex-1 rounded-xl border border-border bg-bg-secondary p-6">
-          
+
           {activeTab === "ai" && (
             <div className="space-y-8 max-w-2xl">
               <div>
                 <h3 className="text-lg font-heading font-bold text-white mb-4">Parameter Deteksi AI</h3>
-                
+
                 <div className="space-y-6">
                   {/* Slider 1 */}
                   <div>
@@ -77,9 +98,9 @@ export default function SettingsPage() {
                       <label className="text-sm font-medium text-text-secondary">Ambang Batas Kepercayaan ANPR (Confidence Threshold)</label>
                       <span className="text-sm font-mono text-accent-cyan">{confidenceThreshold}%</span>
                     </div>
-                    <input 
-                      type="range" 
-                      min="50" max="99" 
+                    <input
+                      type="range"
+                      min="50" max="99"
                       value={confidenceThreshold}
                       onChange={(e) => setConfidenceThreshold(Number(e.target.value))}
                       className="w-full h-2 bg-bg-tertiary rounded-lg appearance-none cursor-pointer accent-accent-cyan"
@@ -93,8 +114,8 @@ export default function SettingsPage() {
                       <label className="text-sm font-medium text-text-secondary">Waktu Toleransi Parkir Liar (Detik)</label>
                       <span className="text-sm font-mono text-accent-red">{durationThreshold}s</span>
                     </div>
-                    <input 
-                      type="range" 
+                    <input
+                      type="range"
                       min="60" max="600" step="30"
                       value={durationThreshold}
                       onChange={(e) => setDurationThreshold(Number(e.target.value))}
@@ -118,6 +139,56 @@ export default function SettingsPage() {
                   </button>
                 </div>
               </div>
+
+              <div className="border border-[#1E2D4D] rounded-lg p-4 space-y-3">
+                <h3 className="text-white font-medium">Integrasi Telegram Bot</h3>
+                <div className="flex items-center gap-2">
+                  <span className={`w-2 h-2 rounded-full ${telegramStatus?.configured ? 'bg-green-400' : 'bg-red-400'}`} />
+                  <span className="text-sm text-slate-300">
+                    {telegramStatus?.configured ? `Terhubung${telegramStatus.bot ? ` · @${telegramStatus.bot}` : ''}` : 'Tidak dikonfigurasi'}
+                  </span>
+                </div>
+                {!telegramStatus?.configured && (
+                  <p className="text-xs text-slate-500">Tambahkan TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID di .env.local untuk mengaktifkan notifikasi screenshot pelanggaran.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeTab === "kamera" && (
+            <div className="space-y-6 max-w-2xl">
+              <h3 className="text-lg font-heading font-bold text-white mb-4">Pengaturan Kamera</h3>
+              <p className="text-sm text-text-muted mb-4">Ubah URL stream untuk setiap kamera. Gunakan URL YouTube (video atau live) untuk hasil terbaik.</p>
+
+              {cameras.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-sm border border-border rounded-lg border-dashed">
+                  Memuat data kamera...
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {cameras.map(cam => (
+                    <div key={cam.id} className="p-4 rounded-lg border border-border bg-bg-tertiary/50">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-white">{cam.name}</span>
+                        <span className="text-xs text-slate-400">{cam.location}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input 
+                          type="text" 
+                          defaultValue={cam.stream_url || ''} 
+                          placeholder="https://www.youtube.com/watch?v=..."
+                          className="flex-1 rounded-lg border border-border bg-bg-primary py-2 px-3 text-sm text-white focus:border-accent-blue focus:outline-none"
+                          onBlur={(e) => {
+                            if (e.target.value !== cam.stream_url) {
+                              updateStreamUrl(cam.id, e.target.value);
+                            }
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -125,7 +196,7 @@ export default function SettingsPage() {
             <div className="space-y-6">
               <h3 className="text-lg font-heading font-bold text-white mb-4">Manajemen Pengguna</h3>
               <p className="text-sm text-text-muted mb-4">Hanya Admin yang dapat menambah atau mengubah akses pengguna.</p>
-              
+
               <div className="rounded-lg border border-border overflow-hidden">
                 <table className="w-full text-left text-sm">
                   <thead className="bg-bg-tertiary text-text-secondary">
@@ -166,7 +237,7 @@ export default function SettingsPage() {
           {activeTab === "etle" && (
             <div className="space-y-6 max-w-2xl">
               <h3 className="text-lg font-heading font-bold text-white mb-4">Konfigurasi Endpoint E-TLE</h3>
-              
+
               <div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-text-secondary mb-1">API Endpoint URL</label>

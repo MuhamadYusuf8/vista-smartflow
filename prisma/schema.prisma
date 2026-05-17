@@ -7,13 +7,59 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String   @id @default(dbgenerated("(gen_random_uuid())::text"))
   name      String
   email     String   @unique
   password  String
   role      Role     @default(OFFICER)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @db.Timestamptz(6)
+}
+
+model SystemLog {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  event      String
+  details    String?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([created_at(sort: Desc)], map: "idx_systemlog_created_at")
+  @@index([event], map: "idx_systemlog_event")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model cameras {
+  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name       String
+  location   String
+  lat        Float
+  lng        Float
+  status     String?      @default("ACTIVE")
+  stream_url String?
+  created_at DateTime?    @default(now()) @db.Timestamptz(6)
+  updated_at DateTime?    @default(now()) @db.Timestamptz(6)
+  violations violations[]
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model violations {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camera_id       String?   @db.Uuid
+  type            String
+  license_plate   String
+  vehicle_type    String?   @default("CAR")
+  confidence      Float
+  duration        Int?
+  evidence_url    String?
+  location        String
+  lat             Float
+  lng             Float
+  status          String?   @default("PENDING")
+  timestamp       DateTime? @default(now()) @db.Timestamptz(6)
+  processed_at    DateTime? @db.Timestamptz(6)
+  etle_ref        String?
+  screenshot_sent Boolean?  @default(false)
+  created_at      DateTime? @default(now()) @db.Timestamptz(6)
+  cameras         cameras?  @relation(fields: [camera_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
 
 enum Role {
@@ -22,44 +68,10 @@ enum Role {
   VIEWER
 }
 
-model Camera {
-  id         String       @id @default(cuid())
-  name       String
-  location   String
-  lat        Float
-  lng        Float
-  status     CameraStatus @default(ACTIVE)
-  streamUrl  String?
-  violations Violation[]
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
-}
-
 enum CameraStatus {
   ACTIVE
   INACTIVE
   MAINTENANCE
-}
-
-model Violation {
-  id           String          @id @default(cuid())
-  cameraId     String
-  camera       Camera          @relation(fields: [cameraId], references: [id])
-  type         ViolationType
-  licensePlate String
-  vehicleType  VehicleType
-  confidence   Float
-  duration     Int?
-  evidenceUrl  String
-  location     String
-  lat          Float
-  lng          Float
-  status       ViolationStatus @default(PENDING)
-  timestamp    DateTime        @default(now())
-  processedAt  DateTime?
-  etleRef      String?
-  createdAt    DateTime        @default(now())
-  updatedAt    DateTime        @updatedAt
 }
 
 enum ViolationType {
@@ -83,20 +95,4 @@ enum ViolationStatus {
   VERIFIED
   EXPORTED
   DISMISSED
-}
-
-model HeatmapData {
-  id        String         @id @default(cuid())
-  lat       Float
-  lng       Float
-  intensity Float
-  date      DateTime       @default(now())
-  type      ViolationType?
-}
-
-model SystemLog {
-  id        String   @id @default(cuid())
-  event     String
-  details   String?
-  createdAt DateTime @default(now())
 }

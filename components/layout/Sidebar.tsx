@@ -11,6 +11,8 @@ import {
   FileText,
   Settings,
   LogOut,
+  Shield,
+  Activity,
 } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 
@@ -18,8 +20,10 @@ const navItems = [
   { name: "Dashboard", href: "/", icon: Home },
   { name: "Pelanggaran", href: "/violations", icon: ShieldAlert, badge: true },
   { name: "Peta Hotspot", href: "/heatmap", icon: MapIcon },
+  { name: "Peta Lalu Lintas", href: "/peta", icon: Activity },
   { name: "CCTV Monitor", href: "/cameras", icon: Camera },
   { name: "Laporan", href: "/reports", icon: FileText },
+  { name: "Audit Log", href: "/audit-log", icon: Shield, adminOnly: true },
   { name: "Pengaturan", href: "/settings", icon: Settings, adminOnly: true },
 ];
 

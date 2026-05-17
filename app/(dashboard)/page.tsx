@@ -1,92 +1,191 @@
-import { Suspense } from "react";
+"use client";
+
+import { useState, useEffect } from "react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { ViolationChart } from "@/components/dashboard/ViolationChart";
 import { VehicleTypeChart } from "@/components/dashboard/VehicleTypeChart";
 import { LiveFeed } from "@/components/dashboard/LiveFeed";
 import { RecentViolations } from "@/components/dashboard/RecentViolations";
 import { AlertBanner } from "@/components/dashboard/AlertBanner";
+import PipelineStatus from "@/components/dashboard/PipelineStatus";
+import { useRealtimeViolations } from "@/hooks/useRealtime";
+import { supabase } from "@/lib/supabase";
 
-// These would normally be fetched from an API
-const mockHourlyData = [
+// Data awal Tren
+const initialHourlyData = [
   { hour: "00:00", ILLEGAL_PARKING: 12, BUSWAY_VIOLATION: 2, BICYCLE_LANE_VIOLATION: 0, BUS_STOP_VIOLATION: 1, WRONG_LANE: 3, total: 18 },
   { hour: "04:00", ILLEGAL_PARKING: 8, BUSWAY_VIOLATION: 1, BICYCLE_LANE_VIOLATION: 0, BUS_STOP_VIOLATION: 0, WRONG_LANE: 2, total: 11 },
   { hour: "08:00", ILLEGAL_PARKING: 45, BUSWAY_VIOLATION: 15, BICYCLE_LANE_VIOLATION: 8, BUS_STOP_VIOLATION: 12, WRONG_LANE: 22, total: 102 },
   { hour: "12:00", ILLEGAL_PARKING: 52, BUSWAY_VIOLATION: 8, BICYCLE_LANE_VIOLATION: 4, BUS_STOP_VIOLATION: 18, WRONG_LANE: 16, total: 98 },
   { hour: "16:00", ILLEGAL_PARKING: 60, BUSWAY_VIOLATION: 20, BICYCLE_LANE_VIOLATION: 10, BUS_STOP_VIOLATION: 25, WRONG_LANE: 30, total: 145 },
-  { hour: "20:00", ILLEGAL_PARKING: 35, BUSWAY_VIOLATION: 5, BICYCLE_LANE_VIOLATION: 2, BUS_STOP_VIOLATION: 8, WRONG_LANE: 10, total: 60 },
+  // Data jam sekarang akan diupdate di array terakhir ini
+  { hour: "Sekarang", ILLEGAL_PARKING: 0, BUSWAY_VIOLATION: 0, BICYCLE_LANE_VIOLATION: 0, BUS_STOP_VIOLATION: 0, WRONG_LANE: 0, total: 0 },
 ];
 
-const mockVehicleData = [
-  { name: "CAR", value: 125, color: "#3B82F6" },
-  { name: "MOTORCYCLE", value: 87, color: "#10B981" },
-  { name: "BUS", value: 42, color: "#F59E0B" },
-  { name: "TRUCK", value: 24, color: "#EF4444" },
-];
-
-const mockRecentViolations = [
-  {
-    id: "1",
-    cameraId: "cam1",
-    type: "ILLEGAL_PARKING" as const,
-    licensePlate: "B 1234 ABC",
-    vehicleType: "CAR" as const,
-    confidence: 0.96,
-    duration: 345,
-    evidenceUrl: "",
-    location: "Jl. Jend. Sudirman KM 2",
-    lat: -6.2, lng: 106.8,
-    status: "PENDING" as const,
-    timestamp: new Date(Date.now() - 1000 * 60 * 2),
-    createdAt: new Date(), updatedAt: new Date()
-  },
-  {
-    id: "2",
-    cameraId: "cam2",
-    type: "BUSWAY_VIOLATION" as const,
-    licensePlate: "F 5678 DEF",
-    vehicleType: "MOTORCYCLE" as const,
-    confidence: 0.88,
-    duration: null,
-    evidenceUrl: "",
-    location: "Jl. Gatot Subroto",
-    lat: -6.2, lng: 106.8,
-    status: "VERIFIED" as const,
-    timestamp: new Date(Date.now() - 1000 * 60 * 15),
-    createdAt: new Date(), updatedAt: new Date()
-  },
-  {
-    id: "3",
-    cameraId: "cam1",
-    type: "ILLEGAL_PARKING" as const,
-    licensePlate: "D 9012 GHI",
-    vehicleType: "CAR" as const,
-    confidence: 0.99,
-    duration: 120,
-    evidenceUrl: "",
-    location: "Jl. MH Thamrin",
-    lat: -6.2, lng: 106.8,
-    status: "EXPORTED" as const,
-    timestamp: new Date(Date.now() - 1000 * 60 * 45),
-    createdAt: new Date(), updatedAt: new Date()
-  }
+const initialVehicleData = [
+  { name: "CAR", value: 0, color: "#3B82F6" },
+  { name: "MOTORCYCLE", value: 0, color: "#10B981" },
+  { name: "BUS", value: 0, color: "#F59E0B" },
+  { name: "TRUCK", value: 0, color: "#EF4444" },
 ];
 
 export default function Dashboard() {
-  const hasCriticalAlert = mockRecentViolations.some(
-    (v) => v.status === "PENDING" && v.duration && v.duration > 300
-  );
+  const [totalViolationsToday, setTotalViolationsToday] = useState(0);
+  const [recentViolations, setRecentViolations] = useState<any[]>([]);
+  
+  // State Dinamis
+  const [vehicleData, setVehicleData] = useState(initialVehicleData);
+  const [hourlyData, setHourlyData] = useState(initialHourlyData);
+  const [avgConfidence, setAvgConfidence] = useState(98.5); 
+  
+  // State Alert
+  const [hasCriticalAlert, setHasCriticalAlert] = useState(false);
+  const [alertMessage, setAlertMessage] = useState("");
+
+  // Fungsi Play Audio Anti-Error Browser
+  const playBeep = () => {
+    try {
+      const audio = new Audio('https://www.soundjay.com/buttons/sounds/beep-07a.mp3'); 
+      const playPromise = audio.play();
+      
+      // Tangkap error jika browser memblokir suara karena belum ada interaksi user
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          console.log("⚠️ Suara diblokir browser. Silakan klik layar website 1x agar web diizinkan membunyikan suara.");
+        });
+      }
+    } catch (error) {
+      console.error("Audio play failed", error);
+    }
+  };
+
+  // Fetch Data Awal dari Database
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Ambil 10 data terbaru
+      const { data: recent } = await supabase
+        .from('violations')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (recent) {
+        const formattedRecent = recent.map((v: any) => ({
+          id: v.id,
+          cameraId: v.camera_id,
+          type: v.type,
+          licensePlate: v.license_plate,
+          vehicleType: v.vehicle_type,
+          confidence: v.confidence,
+          location: v.location || "Lokasi Tidak Diketahui",
+          status: v.status || "PENDING",
+          timestamp: new Date(v.created_at),
+        }));
+        setRecentViolations(formattedRecent);
+      }
+
+      // Hitung total hari ini
+      const { count } = await supabase
+        .from('violations')
+        .select('*', { count: 'exact', head: true })
+        .gte('created_at', today.toISOString());
+      
+      if (count !== null) setTotalViolationsToday(count);
+
+      // Hitung Distribusi Kendaraan hari ini
+      const { data: todayData } = await supabase
+        .from('violations')
+        .select('vehicle_type')
+        .gte('created_at', today.toISOString());
+
+      if (todayData) {
+        const counts: Record<string, number> = { CAR: 0, MOTORCYCLE: 0, BUS: 0, TRUCK: 0 };
+        todayData.forEach((v: any) => {
+          if (counts[v.vehicle_type] !== undefined) counts[v.vehicle_type]++;
+        });
+        setVehicleData(prev => prev.map(item => ({ ...item, value: counts[item.name] || 0 })));
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  // MENDENGARKAN DATA REALTIME DARI AI PYTHON
+  useRealtimeViolations((newRecord: any) => {
+    // 1. Mainkan suara peringatan
+    playBeep();
+    
+    // 2. Munculkan Notifikasi Merah
+    setHasCriticalAlert(true);
+    setAlertMessage(`🚨 PELANGGARAN BARU: ${newRecord.vehicle_type} (${newRecord.license_plate}) melakukan ${newRecord.type.replace(/_/g, ' ')} di ${newRecord.location}`);
+    
+    // Matikan notifikasi setelah 8 detik
+    setTimeout(() => {
+      setHasCriticalAlert(false);
+    }, 8000);
+
+    // 3. Tambah angka total pelanggaran
+    setTotalViolationsToday((prev) => prev + 1);
+
+    // 4. Update Akurasi ANPR Dinamis (Rata-rata confidence)
+    if (newRecord.confidence) {
+      setAvgConfidence((prev) => {
+        const newConf = newRecord.confidence * 100;
+        return Number(((prev * 9 + newConf) / 10).toFixed(1));
+      });
+    }
+
+    // 5. Update Tren Pelanggaran (Chart Area - Diperbaiki agar sesuai aturan React)
+    setHourlyData((prev) => {
+      const newData = [...prev];
+      const lastIndex = newData.length - 1;
+      const typeKey = newRecord.type as keyof typeof newData[0];
+      
+      if (newData[lastIndex][typeKey] !== undefined) {
+        // Buat objek baru agar React mendeteksi perubahan state
+        newData[lastIndex] = {
+          ...newData[lastIndex],
+          [typeKey]: (newData[lastIndex][typeKey] as number) + 1,
+          total: newData[lastIndex].total + 1
+        };
+      }
+      return newData;
+    });
+
+    // 6. Masukkan data ke list Terbaru
+    const newDet = {
+      id: newRecord.id || Math.random().toString(),
+      cameraId: newRecord.camera_id,
+      type: newRecord.type,
+      licensePlate: newRecord.license_plate,
+      vehicleType: newRecord.vehicle_type,
+      confidence: newRecord.confidence,
+      location: newRecord.location || "Lokasi Tidak Diketahui",
+      status: "PENDING",
+      timestamp: new Date(newRecord.created_at || Date.now()),
+    };
+    setRecentViolations((prev) => [newDet, ...prev].slice(0, 10));
+
+    // 7. Update Pie Chart Kendaraan
+    setVehicleData((prevData) => {
+      return prevData.map((item) => {
+        if (item.name === newRecord.vehicle_type) {
+          return { ...item, value: item.value + 1 };
+        }
+        return item;
+      });
+    });
+  });
 
   return (
     <div className="space-y-6">
-      {/* Alert Banner */}
       {hasCriticalAlert && (
-        <AlertBanner 
-          message="KRITIS: 3 pelanggaran parkir liar belum diproses — durasi >5 menit terdeteksi" 
-          type="critical" 
-        />
+        <AlertBanner message={alertMessage} type="critical" />
       )}
 
-      {/* Page Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-heading text-2xl font-bold tracking-tight text-white mb-1">
@@ -98,71 +197,70 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatsCard
           title="Total Pelanggaran Hari Ini"
-          value={247}
-          trend={12}
+          value={totalViolationsToday}
+          trend={totalViolationsToday > 0 ? 2.5 : 0} 
           colorTheme="red"
           delay={0.1}
         />
         <StatsCard
           title="Kamera Aktif"
-          value="48 / 52"
-          subtitle="3 maintenance"
+          value="1 / 1"
+          subtitle="CCTV Bundaran HI"
           colorTheme="blue"
           delay={0.2}
         />
         <StatsCard
-          title="Akurasi ANPR"
-          value={96.8}
-          trend={0.3}
+          title="Akurasi AI / ANPR"
+          value={avgConfidence}
+          trend={0.1}
           colorTheme="green"
           delay={0.3}
         />
         <StatsCard
           title="Waktu Respons Rata-rata"
-          value="4.2"
-          subtitle="menit"
-          trend={-0.8}
+          value="1.2" 
+          subtitle="detik"
+          trend={-15.4}
           colorTheme="amber"
           delay={0.4}
         />
       </div>
 
-      {/* Charts Row */}
+      <PipelineStatus />
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="rounded-xl border border-border bg-bg-secondary p-6 lg:col-span-3">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="font-heading text-lg font-bold text-white">Tren Pelanggaran</h2>
-              <p className="text-xs text-text-muted">24 jam terakhir berdasarkan jenis</p>
+              <p className="text-xs text-text-muted">Distribusi data Real-time</p>
             </div>
           </div>
           <div className="h-[300px] w-full">
-            <ViolationChart data={mockHourlyData} />
+            <ViolationChart data={hourlyData} />
           </div>
         </div>
-        
+
         <div className="rounded-xl border border-border bg-bg-secondary p-6 lg:col-span-2">
           <div className="mb-4">
             <h2 className="font-heading text-lg font-bold text-white">Distribusi Kendaraan</h2>
             <p className="text-xs text-text-muted">Berdasarkan deteksi AI hari ini</p>
           </div>
           <div className="h-[300px] w-full">
-            <VehicleTypeChart data={mockVehicleData} />
+            <VehicleTypeChart data={vehicleData} />
           </div>
         </div>
       </div>
 
-      {/* Bottom Row */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="lg:col-span-2 h-[500px]">
           <LiveFeed />
         </div>
         <div className="lg:col-span-3 h-[500px]">
-          <RecentViolations violations={mockRecentViolations as any} />
+          <RecentViolations violations={recentViolations as any} />
         </div>
       </div>
     </div>

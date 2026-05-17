@@ -1,41 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { Prisma } from "@prisma/client";
+import { supabase } from "@/lib/supabase";
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const type = searchParams.get("type");
-    const days = parseInt(searchParams.get("days") || "7");
+    const days = parseInt(searchParams.get("days") ?? "7");
 
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
 
-    const where: Prisma.ViolationWhereInput = {
-      timestamp: { gte: startDate }
-    };
+    let query = supabase
+      .from("violations")
+      .select("lat, lng, type")
+      .gte("timestamp", startDate.toISOString())
+      .not("lat", "is", null)
+      .not("lng", "is", null);
 
     if (type) {
-      where.type = type as any; // Cast safely for query param
+      query = query.eq("type", type);
     }
 
-    const violations = await prisma.violation.findMany({
-      where,
-      select: {
-        lat: true,
-        lng: true,
-      }
-    });
+    const { data, error } = await query;
+    if (error) throw error;
 
-    // KODE BARU
-    const points = violations.map((v: { lat: number; lng: number; [key: string]: any }) => ({
+    const points = (data ?? []).map((v) => ({
       lat: v.lat,
       lng: v.lng,
-      intensity: Math.random() * 0.5 + 0.5
+      intensity: 0.5 + Math.random() * 0.5,
     }));
 
-    return NextResponse.json({ points });
+    return NextResponse.json({ points, total: points.length });
   } catch (error) {
+    console.error("[Heatmap Error]", error);
     return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
   }
 }

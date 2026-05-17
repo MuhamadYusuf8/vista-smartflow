@@ -1,8 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { cn } from "@/lib/utils";
-import { Bell, Menu, Search, FileText } from "lucide-react";
+import { Bell, Menu, Search } from "lucide-react";
 import { MobileNav } from "./MobileNav";
 import { useState } from "react";
 

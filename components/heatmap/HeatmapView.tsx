@@ -16,10 +16,11 @@ function HeatLayer({ points }: { points: [number, number, number][] }) {
   const map = useMap();
 
   useEffect(() => {
-    // Check if heatLayer is available on L (requires leaflet.heat)
-    if (!(L as any).heatLayer) return;
+  // Check if heatLayer is available on L (requires leaflet.heat)
+  const Lext = L as typeof L & { heatLayer: (points: [number, number, number][], options: object) => L.Layer };
+  if (!Lext.heatLayer) return;
 
-    const layer = (L as any).heatLayer(points, {
+  const layer = Lext.heatLayer(points, {
       radius: 25,
       blur: 15,
       maxZoom: 17,

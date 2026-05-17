@@ -1,49 +1,33 @@
-import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { NextResponse } from 'next/server'
+import { supabase } from '@/lib/supabase'
 
-export async function GET(req: NextRequest) {
-  try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+export async function GET() {
+  const todayStart = new Date()
+  todayStart.setHours(0, 0, 0, 0)
 
-    const cameras = await prisma.camera.findMany({
-      include: {
-        _count: {
-          select: {
-            violations: {
-              where: {
-                timestamp: {
-                  gte: today,
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: {
-        name: "asc",
-      },
-    });
+  const { data: cameras, error } = await supabase
+    .from('cameras')
+    .select('*')
+    .order('name')
 
-    interface CameraWithCount {
-      id: string;
-      name: string;
-      location: string;
-      status: string;
-      _count: {
-        violations: number;
-      };
-      [key: string]: any;
-    }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    const formattedCameras = (cameras as unknown as CameraWithCount[]).map((camera) => ({
-      ...camera,
-      violationsToday: camera._count.violations,
-      uptime: 99.9,
-    }));
+  // Get violation counts per camera for today
+  const { data: counts } = await supabase
+    .from('violations')
+    .select('camera_id')
+    .gte('timestamp', todayStart.toISOString())
 
-    return NextResponse.json(formattedCameras);
-  } catch (error) {
-    return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
-  }
+  const countMap: Record<string, number> = {}
+  ;(counts ?? []).forEach(v => {
+    countMap[v.camera_id] = (countMap[v.camera_id] ?? 0) + 1
+  })
+
+  const result = (cameras ?? []).map(cam => ({
+    ...cam,
+    violations_today: countMap[cam.id] ?? 0,
+    uptime: cam.status === 'ACTIVE' ? 98 + Math.random() * 2 : cam.status === 'MAINTENANCE' ? 0 : 45
+  }))
+
+  return NextResponse.json({ cameras: result })
 }

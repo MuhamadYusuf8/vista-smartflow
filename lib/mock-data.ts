@@ -59,7 +59,7 @@ export function generateViolations(cameraIds: string[]) {
   const violations = [];
   const types = Object.values(ViolationType);
   const vehicles = Object.values(VehicleType);
-  const statuses = Object.values(ViolationStatus);
+
   
   const now = new Date();
   

@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { Violation } from "@prisma/client";
 import { formatDistanceToNow } from "date-fns";
 import { id } from "date-fns/locale";
@@ -15,13 +16,25 @@ interface RecentViolationsProps {
   violations: Violation[];
 }
 
+// Hydration-safe subscription using useSyncExternalStore
+// This is the React-recommended pattern for client-only rendering
+function subscribe(callback: () => void) {
+  window.addEventListener("online", callback);
+  return () => window.removeEventListener("online", callback);
+}
+function getSnapshot() { return true; }
+function getServerSnapshot() { return false; }
+
 export function RecentViolations({ violations }: RecentViolationsProps) {
+  // useSyncExternalStore avoids the setState-in-effect lint error
+  // Returns false on server, true on client — safe for hydration
+  const mounted = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   return (
     <div className="flex h-full min-h-[400px] flex-col rounded-xl border border-border bg-bg-secondary overflow-hidden">
       <div className="border-b border-border bg-bg-secondary/50 px-6 py-4 flex items-center justify-between">
         <h3 className="font-heading font-semibold text-white">Deteksi Terbaru</h3>
-        <Link 
-          href="/violations" 
+        <Link
+          href="/violations"
           className="text-xs font-medium text-accent-blue hover:text-blue-400 transition-colors"
         >
           Lihat Semua
@@ -47,15 +60,20 @@ export function RecentViolations({ violations }: RecentViolationsProps) {
                   className="group flex flex-col gap-3 rounded-lg border border-transparent p-4 transition-all hover:bg-bg-tertiary hover:border-border cursor-pointer relative overflow-hidden"
                 >
                   <div className="absolute left-0 top-0 bottom-0 w-1 bg-transparent group-hover:bg-accent-blue transition-colors rounded-l-lg" />
-                  
+
                   <div className="flex items-start justify-between">
-                    <LicensePlate 
-                      plate={violation.licensePlate} 
+                    <LicensePlate
+                      plate={violation.licensePlate}
                       size="sm"
                       type={violation.vehicleType === "CAR" ? "car" : "motorcycle"}
                     />
                     <div className="flex items-center gap-2 text-xs text-text-muted">
-                      <span>{formatDistanceToNow(new Date(violation.timestamp), { addSuffix: true, locale: id })}</span>
+                      <span>
+                        {mounted
+                          ? formatDistanceToNow(new Date(violation.timestamp), { addSuffix: true, locale: id })
+                          : "..."
+                        }
+                      </span>
                     </div>
                   </div>
 
@@ -69,7 +87,7 @@ export function RecentViolations({ violations }: RecentViolationsProps) {
 
                     <div className="flex flex-col items-end gap-2 shrink-0">
                       <StatusBadge type="violationStatus" value={violation.status} />
-                      
+
                       {violation.duration && (
                         <div className={cn(
                           "flex items-center gap-1 text-xs font-mono",
