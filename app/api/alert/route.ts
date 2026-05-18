@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabase'
 
+export const dynamic = 'force-dynamic'
+
 const VIOLATION_LABELS: Record<string, string> = {
   ILLEGAL_PARKING: '🚫 Parkir Liar',
   BUSWAY_VIOLATION: '🚌 Pelanggaran Jalur Busway',
