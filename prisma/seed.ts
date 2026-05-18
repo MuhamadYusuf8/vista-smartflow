@@ -15,9 +15,8 @@ async function main() {
   
   // Clear existing data
   await prisma.systemLog.deleteMany({})
-  await prisma.heatmapData.deleteMany({})
-  await prisma.violation.deleteMany({})
-  await prisma.camera.deleteMany({})
+  await prisma.violations.deleteMany({})
+  await prisma.cameras.deleteMany({})
   await prisma.user.deleteMany({})
   
   // Create test users
@@ -58,7 +57,16 @@ async function main() {
   const camerasData = generateCameras()
   
   const createdCameras = await Promise.all(
-    camerasData.map(c => prisma.camera.create({ data: c }))
+    camerasData.map(c => prisma.cameras.create({
+      data: {
+        name: c.name,
+        location: c.location,
+        lat: c.lat,
+        lng: c.lng,
+        status: c.status,
+        stream_url: c.streamUrl
+      }
+    }))
   )
   
   console.log(`Created ${createdCameras.length} cameras.`)
@@ -77,9 +85,26 @@ async function main() {
 
   // Batch insert violations to avoid query limits
   const BATCH_SIZE = 50;
-  for (let i = 0; i < violationsData.length; i += BATCH_SIZE) {
-    const batch = violationsData.slice(i, i + BATCH_SIZE);
-    await prisma.violation.createMany({ data: batch });
+  const formattedViolations = violationsData.map(v => ({
+    camera_id: v.cameraId,
+    type: v.type,
+    license_plate: v.licensePlate,
+    vehicle_type: v.vehicleType,
+    confidence: v.confidence,
+    duration: v.duration,
+    evidence_url: v.evidenceUrl,
+    location: v.location,
+    lat: v.lat,
+    lng: v.lng,
+    status: v.status,
+    timestamp: v.timestamp,
+    processed_at: v.processedAt,
+    etle_ref: v.etleRef
+  }));
+
+  for (let i = 0; i < formattedViolations.length; i += BATCH_SIZE) {
+    const batch = formattedViolations.slice(i, i + BATCH_SIZE);
+    await prisma.violations.createMany({ data: batch });
   }
   
   console.log(`Created ${violationsData.length} violations.`)
