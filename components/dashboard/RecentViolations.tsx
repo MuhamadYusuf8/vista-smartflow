@@ -1,7 +1,7 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
-import { Violation } from "@prisma/client";
+import { Violation } from "@/types";
 import { formatDistanceToNow } from "date-fns";
 import { id } from "date-fns/locale";
 import { LicensePlate } from "@/components/shared/LicensePlate";

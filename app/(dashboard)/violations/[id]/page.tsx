@@ -15,6 +15,7 @@ import {
   RefreshCw,
   ExternalLink,
   AlertTriangle,
+  Send,
 } from "lucide-react";
 import { LicensePlate } from "@/components/shared/LicensePlate";
 import { StatusBadge } from "@/components/shared/StatusBadge";
@@ -41,6 +42,8 @@ export default function ViolationDetailPage({
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [toast, setToast] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [telegramSent, setTelegramSent] = useState(false);
+  const [telegramSending, setTelegramSending] = useState(false);
 
   const showToast = (type: "success" | "error", msg: string) => {
     setToast({ type, msg });
@@ -66,11 +69,32 @@ export default function ViolationDetailPage({
     fetchViolation();
   }, [id]);
 
+  const sendTelegram = async (violationId: string) => {
+    setTelegramSending(true);
+    try {
+      const res = await fetch("/api/alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ violationId }),
+      });
+      const json = await res.json();
+      if (json.sent) {
+        setTelegramSent(true);
+        showToast("success", "✅ Notifikasi Telegram berhasil dikirim!");
+      } else {
+        showToast("error", "Telegram tidak terkonfigurasi di server.");
+      }
+    } catch {
+      showToast("error", "Gagal mengirim notifikasi Telegram.");
+    } finally {
+      setTelegramSending(false);
+    }
+  };
+
   const updateStatus = async (newStatus: "VERIFIED" | "DISMISSED" | "EXPORTED") => {
     if (!violation) return;
     setActionLoading(newStatus);
     try {
-      // Memanggil API route yang memiliki audit trail logging
       const res = await fetch(`/api/violations/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -91,6 +115,11 @@ export default function ViolationDetailPage({
         EXPORTED: "Data berhasil dikirim ke E-TLE",
       };
       showToast("success", labels[newStatus]);
+
+      // Auto-kirim Telegram saat VERIFIED
+      if (newStatus === "VERIFIED") {
+        await sendTelegram(id);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Gagal mengubah status. Silakan coba lagi.";
       showToast("error", msg);
@@ -380,6 +409,24 @@ export default function ViolationDetailPage({
                       <XCircle className="h-5 w-5" />
                     )}
                     Dismiss (Bukan Pelanggaran)
+                  </button>
+                )}
+
+                {/* Tombol Telegram manual */}
+                {(isVerified || isExported) && (
+                  <button
+                    onClick={() => sendTelegram(id)}
+                    disabled={telegramSending || telegramSent}
+                    className="flex w-full items-center justify-center gap-2 rounded-lg border border-accent-cyan/30 bg-accent-cyan/10 px-4 py-3 text-sm font-semibold text-accent-cyan hover:bg-accent-cyan hover:text-bg-primary transition-all disabled:opacity-50"
+                  >
+                    {telegramSending ? (
+                      <RefreshCw className="h-4 w-4 animate-spin" />
+                    ) : telegramSent ? (
+                      <CheckCircle2 className="h-4 w-4" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                    {telegramSent ? "Terkirim ke Telegram" : "Kirim Notifikasi Telegram"}
                   </button>
                 )}
               </div>

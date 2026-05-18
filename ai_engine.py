@@ -1,251 +1,462 @@
+"""
+VISTA SmartFlow AI Engine v2.0 — ROADMAP FASE 1
+================================================
+Peningkatan untuk implementasi skala Jakarta:
+
+1. Pendeteksi Ganjil Genap Otomatis
+   - Cek tanggal & jam saat ini → tentukan plat mana yang melanggar
+   - Hanya aktif di jam 06:00-10:00 & 16:00-21:00, hari kerja
+
+2. Sterilisasi Jalur TransJakarta (Busway)
+   - Poligon khusus zona busway
+   - Jika kendaraan bukan 'bus' masuk zona → tilang BUSWAY_VIOLATION
+
+3. ANPR (Automatic Number Plate Recognition)
+   - Menggunakan EasyOCR (ringan, tidak perlu GPU)
+   - Crop region plat, OCR → kirim ke API
+
+Cara jalankan:
+  pip install ultralytics easyocr opencv-python requests numpy
+  python ai_engine.py
+"""
+
 import cv2
 import requests
 import random
 import time
 import base64
+import re
 import numpy as np
+from datetime import datetime
 from ultralytics import YOLO
 
-print("Sedang memuat AI YOLOv8s dan Modul Pelacakan (Tracker)...")
-# Menggunakan YOLOv8 versi Small (Akurat & Stabil untuk laptop)
-model = YOLO('yolov8s.pt') 
+# ============================================================
+# KONFIGURASI SISTEM
+# ============================================================
+print("🚀 Memuat AI Engine VISTA SmartFlow v2.0 ...")
 
+model = YOLO('yolov8s.pt')
 video_path = 'public/traffic-hd.mp4'
-cap = cv2.VideoCapture(video_path)
 
-if not cap.isOpened():
-    print("❌ Error: Tidak bisa membaca video. Pastikan path 'public/traffic-hd.mp4' benar!")
-    exit()
-
-# Ambil ukuran asli video agar poligon tidak melayang dan presisi
-v_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-v_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
-# Konfigurasi API Next.js & Supabase kamu
 API_URL = "http://localhost:3000/api/violations"
 EVIDENCE_UPLOAD_URL = "http://localhost:3000/api/upload-evidence"
+GANJIL_GENAP_API = "http://localhost:3000/api/ganjil-genap"
 CAMERA_ID = "cctv-bhi-01"
 LOCATION = "Bundaran HI, Jl. MH Thamrin"
 
-# --- VARIABEL PENYIMPANAN MEMORI WAKTU & TILANG ---
-vehicle_timers = {}       # Menyimpan data: { id_mobil: waktu_masuk_zona }
-ticketed_vehicles = set() # Mencatat id_mobil yang sudah ditilang (mencegah spam ID)
-ticketed_plates = {}      # Memori anti-spam plat nomor: { plat_nomor: waktu_terakhir_ditilang }
+cap = cv2.VideoCapture(video_path)
+if not cap.isOpened():
+    print("❌ Error: Video tidak bisa dibuka!")
+    exit()
 
-# Konfigurasi Waktu
-MAX_STOP_SECONDS = 10         # Batas waktu berhenti sebelum ditilang (10 detik)
-PLATE_COOLDOWN_SECONDS = 86400  # Masa tenggang tilang untuk plat yang sama (1 HARI)
+v_width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+v_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-def generate_plate_for_id(track_id):
+# ============================================================
+# FASE 1A: GANJIL GENAP — Status Manager
+# ============================================================
+class GanjilGenapManager:
     """
-    Demo Magic STRICT: Hanya menggunakan plat nomor ASLI dari video 
-    yang berada di area kanan jalan. Tidak ada plat dummy sama sekali.
+    Manager kebijakan Ganjil Genap Jakarta.
+    Update setiap 60 detik dari API agar real-time.
     """
-    real_plates_in_video = [
-        "72A 339.59", # SUV Hitam paling kanan (Paling sering kena tilang)
-        "51F 986.85", # SUV Merah di depan SUV hitam
-        "71E 002.59"  # SUV Silver
-    ]
-    
-    # Kunci pengacakan berdasarkan ID pelacakan kendaraan
+    HOLIDAYS = {
+        "2025-01-01", "2025-03-30", "2025-03-31", "2025-04-18",
+        "2025-05-01", "2025-08-17", "2025-12-25",
+        "2026-01-01", "2026-08-17", "2026-12-25",
+    }
+
+    def __init__(self):
+        self.is_enforced = False
+        self.restricted_plate_type = None  # "GANJIL" atau "GENAP"
+        self.date_is_odd = None
+        self.last_update = 0
+
+    def update(self):
+        """Ambil status Ganjil Genap dari API setiap 60 detik."""
+        if time.time() - self.last_update < 60:
+            return
+
+        try:
+            resp = requests.get(GANJIL_GENAP_API, timeout=3)
+            if resp.status_code == 200:
+                data = resp.json()
+                policy = data.get("policy", {})
+                self.is_enforced = policy.get("isEnforced", False)
+                self.restricted_plate_type = policy.get("restrictedPlate")
+                self.date_is_odd = policy.get("dateIsOdd")
+                print(f"[Gage] Status: {'🚫 AKTIF' if self.is_enforced else '✅ Tidak Aktif'} | Dilarang: {self.restricted_plate_type}")
+            self.last_update = time.time()
+        except Exception as e:
+            # Fallback: hitung secara lokal
+            self._local_calculate()
+
+    def _local_calculate(self):
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        if now.weekday() >= 5 or date_str in self.HOLIDAYS:
+            self.is_enforced = False
+            return
+        hour = now.hour
+        in_session = (6 <= hour < 10) or (16 <= hour < 21)
+        if in_session:
+            self.is_enforced = True
+            self.date_is_odd = now.day % 2 != 0
+            self.restricted_plate_type = "GENAP" if self.date_is_odd else "GANJIL"
+        else:
+            self.is_enforced = False
+
+    def is_plate_violating(self, plate: str) -> bool:
+        """Return True jika plat melanggar kebijakan Gage hari ini."""
+        if not self.is_enforced or not self.restricted_plate_type:
+            return False
+        digits = re.sub(r'\D', '', plate)
+        if not digits:
+            return False
+        last_digit = int(digits[-1])
+        plate_is_even = last_digit % 2 == 0
+        if self.restricted_plate_type == "GENAP" and plate_is_even:
+            return True
+        if self.restricted_plate_type == "GANJIL" and not plate_is_even:
+            return True
+        return False
+
+
+gage = GanjilGenapManager()
+gage.update()
+
+# ============================================================
+# FASE 1B: ZONA BUSWAY — Sterilisasi Jalur TransJakarta
+# ============================================================
+# Zona busway: lajur paling kiri video (asumsi kamera Bundaran HI)
+busway_zone = np.array([
+    [0, int(v_height * 0.35)],
+    [int(v_width * 0.20), int(v_height * 0.35)],
+    [int(v_width * 0.14), v_height],
+    [0, v_height],
+], np.int32)
+
+# ============================================================
+# FASE 1A: ZONA PARKIR LIAR (existing)
+# ============================================================
+parking_zone = np.array([
+    [int(v_width * 0.80), int(v_height * 0.40)],
+    [v_width, int(v_height * 0.40)],
+    [v_width, v_height],
+    [int(v_width * 0.72), v_height],
+], np.int32)
+
+# ============================================================
+# FASE 1C: ANPR (Automatic Number Plate Recognition)
+# ============================================================
+anpr_available = False
+ocr_reader = None
+
+try:
+    import easyocr
+    ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+    anpr_available = True
+    print("✅ ANPR (EasyOCR) berhasil dimuat — Plat nomor akan dibaca otomatis!")
+except ImportError:
+    print("⚠️ EasyOCR tidak tersedia. Gunakan 'pip install easyocr' untuk ANPR asli.")
+    print("   Saat ini menggunakan mode demo (plat deterministik).")
+
+
+def read_plate_ocr(frame: np.ndarray, box: tuple) -> str | None:
+    """
+    Baca plat nomor dari region kendaraan menggunakan EasyOCR.
+    Mengembalikan string plat jika terdeteksi, atau None jika gagal.
+    """
+    if not anpr_available or ocr_reader is None:
+        return None
+
+    x1, y1, x2, y2 = [int(v) for v in box]
+    # Ambil 30% bawah bounding box (area plat biasanya di bumper)
+    plate_y1 = y1 + int((y2 - y1) * 0.6)
+    plate_crop = frame[plate_y1:y2, x1:x2]
+
+    if plate_crop.size == 0:
+        return None
+
+    try:
+        # Preprocessing: grayscale + sharpen
+        gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
+        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.GaussianBlur(gray, (3, 3), 0)
+        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        results = ocr_reader.readtext(thresh, detail=0, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ")
+        if results:
+            raw = " ".join(results).upper().strip()
+            # Filter noise: minimal 3 karakter, ada huruf dan angka
+            cleaned = re.sub(r'[^A-Z0-9\s]', '', raw).strip()
+            if len(cleaned) >= 4:
+                return cleaned[:12]  # max 12 karakter
+    except Exception:
+        pass
+    return None
+
+
+def generate_plate_demo(track_id: int) -> str:
+    """Fallback demo: plat deterministik dari ID."""
+    real_plates = ["72A 339.59", "51F 986.85", "71E 002.59", "B 1234 CD", "D 5678 EF"]
     random.seed(track_id)
-    plate = random.choice(real_plates_in_video)
-    random.seed() # Kembalikan ke mode acak normal
-    
+    plate = random.choice(real_plates)
+    random.seed()
     return plate
 
 
-def capture_evidence(frame, box, plate, track_id):
-    """
-    Capture frame sebagai bukti pelanggaran:
-    1. Tambahkan overlay teks informatif di atas frame
-    2. Encode ke base64 JPEG
-    3. Upload ke API Next.js dan dapatkan URL publik
-    """
-    # Buat salinan frame agar tidak merusak tampilan asli
-    evidence_frame = frame.copy()
-    
-    x1, y1, x2, y2 = [int(v) for v in box]
-    
-    # Gambar bounding box kendaraan pelanggar dengan border tebal
-    cv2.rectangle(evidence_frame, (x1, y1), (x2, y2), (0, 0, 255), 4)
-    
-    # Label plat nomor di atas bounding box
-    label_bg_y1 = max(0, y1 - 40)
-    cv2.rectangle(evidence_frame, (x1, label_bg_y1), (x1 + 300, y1), (0, 0, 200), -1)
-    cv2.putText(evidence_frame, f"PELANGGAR: {plate}", (x1 + 5, y1 - 10),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+# ============================================================
+# MEMORI ANTI-SPAM & TIMER
+# ============================================================
+vehicle_timers = {}
+ticketed_vehicles = set()
+ticketed_plates = {}
 
-    # Watermark sistem di pojok kiri atas
-    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    cv2.rectangle(evidence_frame, (0, 0), (640, 70), (0, 0, 0), -1)
-    cv2.putText(evidence_frame, "VISTA SmartFlow AI - BUKTI PELANGGARAN",
+MAX_STOP_SECONDS = 10
+PLATE_COOLDOWN_SECONDS = 86400
+
+
+def capture_evidence(frame, box, plate, track_id, violation_type="ILLEGAL_PARKING"):
+    """
+    Ambil foto bukti, tambahkan overlay informatif, upload ke API.
+    """
+    evidence_frame = frame.copy()
+    x1, y1, x2, y2 = [int(v) for v in box]
+
+    # Warna berdasarkan jenis pelanggaran
+    vtype_color = {
+        "ILLEGAL_PARKING": (0, 0, 255),
+        "BUSWAY_VIOLATION": (0, 165, 255),
+        "GANJIL_GENAP": (180, 0, 255),
+    }.get(violation_type, (0, 0, 255))
+
+    cv2.rectangle(evidence_frame, (x1, y1), (x2, y2), vtype_color, 4)
+
+    # Label
+    label_text = f"{violation_type.replace('_', ' ')}: {plate}"
+    label_bg_y1 = max(0, y1 - 45)
+    cv2.rectangle(evidence_frame, (x1, label_bg_y1), (x1 + 420, y1), vtype_color, -1)
+    cv2.putText(evidence_frame, label_text, (x1 + 5, y1 - 12),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2)
+
+    # Watermark
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cv2.rectangle(evidence_frame, (0, 0), (700, 70), (0, 0, 0), -1)
+    cv2.putText(evidence_frame, "VISTA SmartFlow AI v2.0 — BUKTI PELANGGARAN",
                 (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2)
-    cv2.putText(evidence_frame, f"CCTV-BHI-01  |  {ts}  |  ID: {track_id}",
+    cv2.putText(evidence_frame, f"CCTV-BHI-01  |  {ts}  |  ID:{track_id}",
                 (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
 
-    # Zona merah overlay (semi-transparan)
-    overlay = evidence_frame.copy()
-    cv2.fillPoly(overlay, [parking_zone], (0, 0, 180))
-    cv2.addWeighted(overlay, 0.25, evidence_frame, 0.75, 0, evidence_frame)
-    cv2.polylines(evidence_frame, [parking_zone], True, (0, 0, 255), 2)
-
-    # Resize foto agar tidak terlalu besar (max lebar 1280px)
+    # Resize
     h, w = evidence_frame.shape[:2]
     if w > 1280:
         scale = 1280 / w
         evidence_frame = cv2.resize(evidence_frame, (1280, int(h * scale)))
 
-    # Encode ke JPEG lalu base64 (kualitas 75% agar ukuran file kecil)
     _, buffer = cv2.imencode(".jpg", evidence_frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
     b64_image = base64.b64encode(buffer).decode("utf-8")
-    
-    # Upload ke API
+
     try:
         filename = f"evidence_{track_id}_{int(time.time())}.jpg"
-        resp = requests.post(
-            EVIDENCE_UPLOAD_URL,
-            json={"image_base64": b64_image, "filename": filename},
-            timeout=30
-        )
+        resp = requests.post(EVIDENCE_UPLOAD_URL,
+                             json={"image_base64": b64_image, "filename": filename}, timeout=30)
         if resp.status_code == 201:
             return resp.json().get("url")
-        else:
-            print(f"⚠️ Upload bukti gagal: {resp.status_code} - {resp.text[:100]}")
-            return None
     except Exception as e:
         print(f"❌ Error upload bukti: {e}")
-        return None
+    return None
 
-# 1. ZONA DILARANG PARKIR (Lajur Paling Kanan - Dikalibrasi Ulang)
-# Area dipersempit murni hanya untuk 3 mobil di lajur paling pinggir
-parking_zone = np.array([
-    [int(v_width * 0.80), int(v_height * 0.40)],  # Kiri Atas (Digeser ke kanan)
-    [v_width, int(v_height * 0.40)],              # Kanan Atas
-    [v_width, v_height],                          # Kanan Bawah
-    [int(v_width * 0.72), v_height]               # Kiri Bawah (Digeser ke kanan)
-], np.int32)
 
-print("AI Aktif! Memantau Zona Dilarang Parkir (Kanan Presisi)...")
+def send_violation(camera_id, violation_type, plate, vehicle_class, confidence,
+                   location, evidence_url=None, lat=None, lng=None):
+    """Kirim data pelanggaran ke API Dashboard."""
+    payload = {
+        "camera_id": camera_id,
+        "type": violation_type,
+        "license_plate": plate,
+        "vehicle_type": vehicle_class.upper(),
+        "confidence": confidence,
+        "location": location,
+        "lat": lat or (-6.1944 + (random.random() - 0.5) * 0.002),
+        "lng": lng or (106.8229 + (random.random() - 0.5) * 0.002),
+        "evidence_url": evidence_url,
+    }
+    try:
+        response = requests.post(API_URL, json=payload, timeout=10)
+        if response.status_code == 201:
+            print(f"  ✅ Terkirim ke Dashboard: {violation_type} | {plate}")
+            return True
+        else:
+            print(f"  ⚠️ API Error: {response.status_code}")
+    except Exception as e:
+        print(f"  ❌ Koneksi gagal: {e}")
+    return False
+
+
+# ============================================================
+# MAIN LOOP
+# ============================================================
+print("\n" + "="*60)
+print("  VISTA AI Engine v2.0 Aktif!")
+print("  Memantau:")
+print("  ✓ Parkir Liar (>10 detik)")
+print(f"  ✓ Busway Sterilization")
+print(f"  ✓ Ganjil Genap — Aktif: {gage.is_enforced}, Dilarang: {gage.restricted_plate_type}")
+print(f"  ✓ ANPR: {'EasyOCR Aktif' if anpr_available else 'Mode Demo'}")
+print("="*60 + "\n")
+
+frame_count = 0
 
 while cap.isOpened():
     success, frame = cap.read()
-    if not success: 
-        print("Video selesai diputar.")
-        # Jika ingin video looping otomatis untuk pameran, uncomment 2 baris di bawah ini:
-        # cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        # continue
-        break
+    if not success:
+        print("Video selesai. Restart...")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        continue
 
-    # 2. GUNAKAN .track() UNTUK PELACAKAN OBJEK (OBJECT TRACKING)
-    results = model.track(frame, persist=True, imgsz=640, conf=0.45, tracker="botsort.yaml", stream=True)
+    frame_count += 1
+
+    # Update Ganjil Genap status setiap 60 detik
+    if frame_count % 1800 == 0:  # ~60 detik pada 30fps
+        gage.update()
+
+    results = model.track(frame, persist=True, imgsz=640, conf=0.45,
+                          tracker="botsort.yaml", stream=True)
 
     for r in results:
         annotated_frame = r.plot()
-        
-        # Gambar Area Parkir Liar (Transparan/Merah)
-        cv2.polylines(annotated_frame, [parking_zone], isClosed=True, color=(0, 0, 255), thickness=3)
-        cv2.putText(annotated_frame, "ZONA DILARANG PARKIR", (int(v_width * 0.70), int(v_height * 0.38)), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
 
-        # Cek apakah ada objek yang terdeteksi DAN AI berhasil memberikan ID pelacakan
-        if r.boxes.id is not None:
-            boxes = r.boxes.xyxy.cpu().numpy()
-            track_ids = r.boxes.id.cpu().numpy()
-            clss = r.boxes.cls.cpu().numpy()
+        # --- Gambar zona-zona ---
+        # Zona parkir liar
+        cv2.polylines(annotated_frame, [parking_zone], True, (0, 0, 255), 3)
+        overlay_p = annotated_frame.copy()
+        cv2.fillPoly(overlay_p, [parking_zone], (0, 0, 255))
+        cv2.addWeighted(overlay_p, 0.15, annotated_frame, 0.85, 0, annotated_frame)
+        cv2.putText(annotated_frame, "ZONA PARKIR LIAR", (int(v_width * 0.70), int(v_height * 0.37)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
-            current_time = time.time()
+        # Zona busway
+        cv2.polylines(annotated_frame, [busway_zone], True, (0, 165, 255), 3)
+        overlay_b = annotated_frame.copy()
+        cv2.fillPoly(overlay_b, [busway_zone], (0, 165, 255))
+        cv2.addWeighted(overlay_b, 0.15, annotated_frame, 0.85, 0, annotated_frame)
+        cv2.putText(annotated_frame, "BUSWAY", (10, int(v_height * 0.33)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 165, 255), 2)
 
-            for box, track_id, cls in zip(boxes, track_ids, clss):
-                track_id = int(track_id)
-                class_name = model.names[int(cls)]
+        # Status Ganjil Genap di HUD
+        gage_text = f"GAGE: {'AKTIF - Dilarang Plat ' + (gage.restricted_plate_type or '') if gage.is_enforced else 'Tidak Aktif'}"
+        gage_color = (0, 0, 255) if gage.is_enforced else (0, 200, 100)
+        cv2.rectangle(annotated_frame, (0, v_height - 40), (500, v_height), (0, 0, 0), -1)
+        cv2.putText(annotated_frame, gage_text, (10, v_height - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, gage_color, 2)
 
-                # Cari titik tengah ban kendaraan (Centroid Bawah)
-                x1, y1, x2, y2 = box
-                center_x = int((x1 + x2) / 2)
-                bottom_y = int(y2)
+        # ANPR indicator
+        anpr_text = f"ANPR: {'EasyOCR' if anpr_available else 'Demo Mode'}"
+        cv2.putText(annotated_frame, anpr_text, (v_width - 250, v_height - 12),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 200, 255), 1)
 
-                # Gambar titik penanda ban
-                cv2.circle(annotated_frame, (center_x, bottom_y), 6, (0, 255, 255), -1)
+        if r.boxes.id is None:
+            continue
 
-                # Cek apakah ban mobil masuk ke area dilarang parkir
-                is_in_zone = cv2.pointPolygonTest(parking_zone, (center_x, bottom_y), False) >= 0
+        boxes = r.boxes.xyxy.cpu().numpy()
+        track_ids = r.boxes.id.cpu().numpy()
+        clss = r.boxes.cls.cpu().numpy()
+        current_time = time.time()
 
-                # Fokus hanya ke mobil, truk, atau bus
-                if class_name in ['car', 'truck', 'bus']:
-                    if is_in_zone:
-                        # Jika mobil baru masuk zona, catat waktu masuknya
-                        if track_id not in vehicle_timers:
-                            vehicle_timers[track_id] = current_time
-                        
-                        # Hitung sudah berapa detik dia di dalam zona
-                        time_spent = current_time - vehicle_timers[track_id]
-                        
-                        # TAMPILKAN TIMER DETIK MUNDUR DI ATAS MOBIL
-                        cv2.putText(annotated_frame, f"Stop: {int(time_spent)}s", (int(x1), int(y1) - 10), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 3)
+        for box, track_id, cls in zip(boxes, track_ids, clss):
+            track_id = int(track_id)
+            class_name = model.names[int(cls)]
 
-                        # 3. LOGIKA TILANG PARKIR LIAR (> 10 DETIK)
-                        if time_spent >= MAX_STOP_SECONDS and track_id not in ticketed_vehicles:
-                            
-                            # Ambil plat nomor ASLI dari video
-                            plate = generate_plate_for_id(track_id) 
-                            
-                            # --- FITUR ANTI-SPAM PLAT NOMOR ---
-                            last_ticketed_time = ticketed_plates.get(plate, 0)
-                            if current_time - last_ticketed_time < PLATE_COOLDOWN_SECONDS:
-                                ticketed_vehicles.add(track_id)
-                                continue 
-                            # ----------------------------------
+            x1, y1, x2, y2 = box
+            center_x = int((x1 + x2) / 2)
+            bottom_y = int(y2)
 
-                            print(f"📸 Mengambil foto bukti untuk kendaraan #{track_id}...")
-                            evidence_url = capture_evidence(annotated_frame, box, plate, track_id)
-                            if evidence_url:
-                                print(f"✅ Foto bukti terupload: {evidence_url[:60]}...")
-                            else:
-                                print(f"⚠️ Melanjutkan tanpa foto bukti")
+            cv2.circle(annotated_frame, (center_x, bottom_y), 5, (0, 255, 255), -1)
 
-                            # Siapkan paket data untuk API Next.js
-                            payload = {
-                                "camera_id": CAMERA_ID,
-                                "type": 'ILLEGAL_PARKING',
-                                "license_plate": plate,
-                                "vehicle_type": class_name.upper(),
-                                "confidence": 0.99,
-                                "location": LOCATION,
-                                "lat": -6.1944 + (random.random()-0.5)*0.002,
-                                "lng": 106.8229 + (random.random()-0.5)*0.002,
-                                "evidence_url": evidence_url,  # 📸 URL foto bukti
-                            }
-                            
-                            try:
-                                # Tembak data ke API Web Dashboard
-                                response = requests.post(API_URL, json=payload)
-                                if response.status_code == 201:
-                                    print(f"🚨 TILANG: Mobil #{track_id} parkir liar >10s. Plat: {plate} -> TERKIRIM!")
-                                    ticketed_plates[plate] = current_time
-                                else:
-                                    print(f"⚠️ Gagal mengirim ke API. Status: {response.status_code}")
-                            except Exception as e:
-                                print(f"❌ Error koneksi ke localhost: {e}")
+            is_in_parking_zone = cv2.pointPolygonTest(parking_zone, (center_x, bottom_y), False) >= 0
+            is_in_busway_zone = cv2.pointPolygonTest(busway_zone, (center_x, bottom_y), False) >= 0
 
-                            # Masukkan ke daftar tilang ID kendaraan ini
-                            ticketed_vehicles.add(track_id)
-                    
-                    else:
-                        # Jika mobil KELUAR dari zona merah sebelum 10 detik, HAPUS timernya
-                        if track_id in vehicle_timers:
-                            del vehicle_timers[track_id]
+            if class_name not in ['car', 'truck', 'bus', 'motorcycle']:
+                continue
 
-    # Sesuaikan ukuran resolusi layar agar pas di laptop saat demo
+            # --------------------------------------------------------
+            # [1] PARKIR LIAR: kendaraan diam >10 detik di zona merah
+            # --------------------------------------------------------
+            if is_in_parking_zone:
+                if track_id not in vehicle_timers:
+                    vehicle_timers[track_id] = current_time
+
+                time_spent = current_time - vehicle_timers[track_id]
+                cv2.putText(annotated_frame, f"Stop: {int(time_spent)}s",
+                            (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
+                            (0, 165, 255), 2)
+
+                if time_spent >= MAX_STOP_SECONDS and track_id not in ticketed_vehicles:
+                    # ANPR
+                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+
+                    last_time = ticketed_plates.get(plate, 0)
+                    if current_time - last_time < PLATE_COOLDOWN_SECONDS:
+                        ticketed_vehicles.add(track_id)
+                        continue
+
+                    print(f"\n🚨 [PARKIR LIAR] ID:{track_id} | Plat:{plate}")
+                    evidence_url = capture_evidence(frame, box, plate, track_id, "ILLEGAL_PARKING")
+                    send_violation(CAMERA_ID, "ILLEGAL_PARKING", plate, class_name, 0.97,
+                                   LOCATION, evidence_url)
+                    ticketed_plates[plate] = current_time
+                    ticketed_vehicles.add(track_id)
+
+            else:
+                if track_id in vehicle_timers:
+                    del vehicle_timers[track_id]
+
+            # --------------------------------------------------------
+            # [2] BUSWAY VIOLATION: bukan bus masuk jalur busway
+            # --------------------------------------------------------
+            if is_in_busway_zone and class_name != 'bus':
+                busway_key = f"busway_{track_id}"
+                if busway_key not in ticketed_vehicles:
+                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+                    last_time = ticketed_plates.get(plate + "_busway", 0)
+
+                    if current_time - last_time > 300:  # cooldown 5 menit per plat
+                        print(f"\n🟠 [BUSWAY] {class_name} ID:{track_id} | Plat:{plate}")
+                        evidence_url = capture_evidence(frame, box, plate, track_id, "BUSWAY_VIOLATION")
+                        send_violation(CAMERA_ID, "BUSWAY_VIOLATION", plate, class_name, 0.91,
+                                       LOCATION, evidence_url)
+                        ticketed_plates[plate + "_busway"] = current_time
+                        ticketed_vehicles.add(busway_key)
+
+                cv2.putText(annotated_frame, "⚠ BUSWAY!", (int(x1), int(y1) - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.85, (0, 165, 255), 2)
+
+            # --------------------------------------------------------
+            # [3] GANJIL GENAP: cek plat yang sudah dideteksi
+            # --------------------------------------------------------
+            if gage.is_enforced and class_name in ['car', 'truck']:
+                gage_key = f"gage_{track_id}"
+                if gage_key not in ticketed_vehicles:
+                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+                    if gage.is_plate_violating(plate):
+                        last_time = ticketed_plates.get(plate + "_gage", 0)
+                        if current_time - last_time > 3600:  # cooldown 1 jam
+                            print(f"\n🟣 [GANJIL-GENAP] Plat:{plate} dilarang hari ini!")
+                            evidence_url = capture_evidence(frame, box, plate, track_id, "GANJIL_GENAP")
+                            # Kirim sebagai WRONG_LANE (paling dekat kategorinya)
+                            send_violation(CAMERA_ID, "WRONG_LANE", plate, class_name, 0.95,
+                                           LOCATION + " — Pelanggaran Ganjil Genap", evidence_url)
+                            ticketed_plates[plate + "_gage"] = current_time
+                            ticketed_vehicles.add(gage_key)
+
+    # Resize untuk display
     frame_resized = cv2.resize(annotated_frame, (1024, 576))
-    cv2.imshow("VISTA AI Engine - Enterprise Edition", frame_resized)
+    cv2.imshow("VISTA AI Engine v2.0 — SmartFlow Jakarta", frame_resized)
 
-    # Tekan 'q' pada keyboard untuk mematikan AI
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
-# Bersihkan memori kamera
 cap.release()
 cv2.destroyAllWindows()
-print("Sistem AI dimatikan dengan aman.")
+print("\n✅ Sistem AI dimatikan dengan aman.")

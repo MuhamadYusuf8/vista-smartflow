@@ -96,3 +96,28 @@ enum ViolationStatus {
   EXPORTED
   DISMISSED
 }
+
+model citizen_reports {
+  id           String    @id
+  status       String    @default("AI_REVIEW")
+  violation_type String
+  location     String
+  description  String
+  reporter     String    @default("Anonim")
+  ai_confidence Float    @default(0)
+  ai_decision  String?
+  evidence_url String?
+  lat          Float?
+  lng          Float?
+  source       String    @default("JAKI")
+  submitted_at DateTime  @default(now()) @db.Timestamptz(6)
+  processed_at DateTime? @db.Timestamptz(6)
+  processed_by String?
+}
+
+model app_settings {
+  key        String   @id
+  value      String
+  updated_at DateTime @default(now()) @db.Timestamptz(6)
+  updated_by String?
+}

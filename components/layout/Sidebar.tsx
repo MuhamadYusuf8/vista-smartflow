@@ -4,28 +4,51 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
-  Home,
-  ShieldAlert,
-  Map as MapIcon,
-  Camera,
-  FileText,
-  Settings,
-  LogOut,
-  Shield,
-  Activity,
+  Home, ShieldAlert, Map as MapIcon, Camera, FileText,
+  Settings, LogOut, Shield, Activity, Car, DollarSign,
+  Navigation, Route, Users, MonitorPlay, TriangleAlert,
+  Radio, Leaf, Database, Zap, Globe,
 } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 
 const navItems = [
-  { name: "Dashboard", href: "/", icon: Home },
-  { name: "Pelanggaran", href: "/violations", icon: ShieldAlert, badge: true },
-  { name: "Peta Hotspot", href: "/heatmap", icon: MapIcon },
-  { name: "Peta Lalu Lintas", href: "/peta", icon: Activity },
-  { name: "CCTV Monitor", href: "/cameras", icon: Camera },
-  { name: "Laporan", href: "/reports", icon: FileText },
-  { name: "Audit Log", href: "/audit-log", icon: Shield, adminOnly: true },
-  { name: "Pengaturan", href: "/settings", icon: Settings, adminOnly: true },
+  { name: "Dashboard", href: "/", icon: Home, group: "Utama" },
+  { name: "Pelanggaran", href: "/violations", icon: ShieldAlert, badge: true, group: "Utama" },
+  { name: "Peta Hotspot", href: "/heatmap", icon: MapIcon, group: "Utama" },
+  { name: "Peta Lalu Lintas", href: "/peta", icon: Activity, group: "Utama" },
+  { name: "CCTV Monitor", href: "/cameras", icon: Camera, group: "Utama" },
+
+  // Pilot Project (Fase 1)
+  { name: "Executive View", href: "/executive", icon: MonitorPlay, group: "Pilot Koridor" },
+  { name: "Prediksi Kecelakaan", href: "/accident-prediction", icon: TriangleAlert, group: "Pilot Koridor" },
+
+  // Smart City Features
+  { name: "Command Center", href: "/command-center", icon: Radio, group: "Smart City" },
+  { name: "ANPR Nasional", href: "/anpr-national", icon: Database, group: "Smart City" },
+  { name: "Carbon Tracker", href: "/carbon-tracker", icon: Leaf, group: "Smart City" },
+  { name: "Adaptive Traffic", href: "/adaptive-traffic", icon: Zap, group: "Smart City" },
+
+  // Jakarta Policies
+  { name: "Ganjil Genap", href: "/ganjil-genap", icon: Car, group: "Kebijakan Jakarta" },
+  { name: "ERP / Tarif Jalan", href: "/erp", icon: DollarSign, group: "Kebijakan Jakarta" },
+
+  // Integrasi Warga
+  { name: "Laporan Warga (JAKI)", href: "/citizen-report", icon: Users, group: "Integrasi Warga" },
+
+  // AI Analytics
+  { name: "Prediksi Kemacetan", href: "/traffic-forecast", icon: Navigation, group: "AI Analytics" },
+  { name: "Lacak Kendaraan", href: "/vehicle-tracking", icon: Route, group: "AI Analytics" },
+
+  // Admin
+  { name: "Laporan", href: "/reports", icon: FileText, group: "Admin" },
+  { name: "Audit Log", href: "/audit-log", icon: Shield, adminOnly: true, group: "Admin" },
+  { name: "Pengaturan", href: "/settings", icon: Settings, adminOnly: true, group: "Admin" },
+
+  // Expansion
+  { name: "Expansion Hub", href: "/expansion-hub", icon: Globe, group: "Ekspansi Global" },
 ];
+
+const GROUP_ORDER = ["Utama", "Pilot Koridor", "Smart City", "Kebijakan Jakarta", "Integrasi Warga", "AI Analytics", "Admin", "Ekspansi Global"];
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -46,43 +69,71 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 px-4 py-6 overflow-y-auto">
-        {navItems.map((item) => {
-          if (item.adminOnly && userRole !== "ADMIN") return null;
-          
-          const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-          
+      <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-4">
+        {GROUP_ORDER.map((group) => {
+          const items = navItems.filter((item) => item.group === group);
+          const visibleItems = items.filter((item) => !item.adminOnly || userRole === "ADMIN");
+          if (visibleItems.length === 0) return null;
+
+          const GROUP_COLORS: Record<string, string> = {
+            "Pilot Koridor": "text-accent-green",
+            "Smart City": "text-purple-400",
+            "Kebijakan Jakarta": "text-accent-amber",
+            "Integrasi Warga": "text-accent-cyan",
+            "AI Analytics": "text-accent-blue",
+            "Admin": "text-text-muted",
+            "Ekspansi Global": "text-accent-blue",
+          };
+
           return (
-            <Link
-              key={item.name}
-              href={item.href}
-              className={cn(
-                "group flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-all",
-                isActive
-                  ? "bg-accent-blue/10 text-accent-blue shadow-[inset_4px_0_0_0_var(--accent-blue)]"
-                  : "text-text-secondary hover:bg-bg-tertiary hover:text-white"
+            <div key={group}>
+              {group !== "Utama" && (
+                <p className={cn(
+                  "px-3 mb-1.5 text-[10px] font-bold uppercase tracking-widest",
+                  GROUP_COLORS[group] ?? "text-text-muted"
+                )}>
+                  {group}
+                </p>
               )}
-            >
-              <div className="flex items-center gap-3">
-                <item.icon
-                  className={cn(
-                    "h-5 w-5 flex-shrink-0 transition-colors",
-                    isActive ? "text-accent-blue" : "text-text-muted group-hover:text-text-secondary"
-                  )}
-                  aria-hidden="true"
-                />
-                {item.name}
+              <div className="space-y-0.5">
+                {visibleItems.map((item) => {
+                  const isActive = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+                  return (
+                    <Link
+                      key={item.name}
+                      href={item.href}
+                      className={cn(
+                        "group flex items-center justify-between rounded-md px-3 py-2.5 text-sm font-medium transition-all",
+                        isActive
+                          ? "bg-accent-blue/10 text-accent-blue shadow-[inset_4px_0_0_0_var(--accent-blue)]"
+                          : "text-text-secondary hover:bg-bg-tertiary hover:text-white"
+                      )}
+                    >
+                      <div className="flex items-center gap-3">
+                        <item.icon
+                          className={cn(
+                            "h-4 w-4 flex-shrink-0 transition-colors",
+                            isActive ? "text-accent-blue" : "text-text-muted group-hover:text-text-secondary"
+                          )}
+                          aria-hidden="true"
+                        />
+                        <span className="text-sm">{item.name}</span>
+                      </div>
+                      {"badge" in item && item.badge && (
+                        <span className="inline-flex items-center rounded-full bg-accent-red/10 px-2 py-0.5 text-xs font-medium text-accent-red ring-1 ring-inset ring-accent-red/20">
+                          <div className="w-1.5 h-1.5 rounded-full bg-accent-red mr-1 animate-pulse" />
+                          Live
+                        </span>
+                      )}
+                    </Link>
+                  );
+                })}
               </div>
-              {item.badge && (
-                <span className="inline-flex items-center rounded-full bg-accent-red/10 px-2 py-0.5 text-xs font-medium text-accent-red ring-1 ring-inset ring-accent-red/20">
-                  <div className="w-1.5 h-1.5 rounded-full bg-accent-red mr-1 animate-pulse" />
-                  Live
-                </span>
-              )}
-            </Link>
+            </div>
           );
         })}
       </nav>
+
 
       {/* User Footer */}
       <div className="border-t border-border p-4">

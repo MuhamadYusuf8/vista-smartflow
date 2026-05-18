@@ -1,0 +1,22 @@
+{
+  "name": "VISTA SmartFlow AI — Dishub DKI Jakarta",
+  "short_name": "VISTA AI",
+  "description": "Sistem Pemantauan Lalu Lintas Berbasis AI untuk Dinas Perhubungan DKI Jakarta",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060d14",
+  "theme_color": "#3b82f6",
+  "orientation": "any",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Dashboard", "short_name": "Dashboard", "url": "/", "description": "Buka dashboard utama" },
+    { "name": "Executive View", "short_name": "Executive", "url": "/executive", "description": "Dashboard eksekutif" },
+    { "name": "Violations", "short_name": "Violations", "url": "/violations", "description": "Daftar pelanggaran" }
+  ],
+  "categories": ["government", "productivity", "utilities"],
+  "lang": "id",
+  "dir": "ltr"
+}

@@ -8,8 +8,11 @@ import { LiveFeed } from "@/components/dashboard/LiveFeed";
 import { RecentViolations } from "@/components/dashboard/RecentViolations";
 import { AlertBanner } from "@/components/dashboard/AlertBanner";
 import PipelineStatus from "@/components/dashboard/PipelineStatus";
+import TrafficSimulation3D from "@/components/TrafficSimulation3D";
 import { useRealtimeViolations } from "@/hooks/useRealtime";
 import { supabase } from "@/lib/supabase";
+import Link from "next/link";
+import { Car, DollarSign, Navigation, Users, ChevronRight } from "lucide-react";
 
 // Data awal Tren
 const initialHourlyData = [
@@ -255,12 +258,58 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Quick Access */}
+      <div>
+        <h2 className="font-heading text-base font-bold text-white mb-3 flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-accent-amber animate-pulse" />
+          Fitur Implementasi Skala Jakarta
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Link href="/ganjil-genap" className="rounded-xl border border-accent-amber/20 bg-accent-amber/10 p-4 flex flex-col gap-2 hover:opacity-80 transition-opacity">
+            <Car className="h-5 w-5 text-accent-amber" />
+            <div><p className="text-sm font-semibold text-accent-amber">Ganjil Genap</p><p className="text-xs text-text-muted">Deteksi Otomatis</p></div>
+            <ChevronRight className="h-4 w-4 text-accent-amber self-end" />
+          </Link>
+          <Link href="/erp" className="rounded-xl border border-accent-green/20 bg-accent-green/10 p-4 flex flex-col gap-2 hover:opacity-80 transition-opacity">
+            <DollarSign className="h-5 w-5 text-accent-green" />
+            <div><p className="text-sm font-semibold text-accent-green">ERP / Tarif Jalan</p><p className="text-xs text-text-muted">Potensi PAD Jakarta</p></div>
+            <ChevronRight className="h-4 w-4 text-accent-green self-end" />
+          </Link>
+          <Link href="/traffic-forecast" className="rounded-xl border border-accent-cyan/20 bg-accent-cyan/10 p-4 flex flex-col gap-2 hover:opacity-80 transition-opacity">
+            <Navigation className="h-5 w-5 text-accent-cyan" />
+            <div><p className="text-sm font-semibold text-accent-cyan">Prediksi Kemacetan</p><p className="text-xs text-text-muted">AI Forecasting</p></div>
+            <ChevronRight className="h-4 w-4 text-accent-cyan self-end" />
+          </Link>
+          <Link href="/citizen-report" className="rounded-xl border border-accent-blue/20 bg-accent-blue/10 p-4 flex flex-col gap-2 hover:opacity-80 transition-opacity">
+            <Users className="h-5 w-5 text-accent-blue" />
+            <div><p className="text-sm font-semibold text-accent-blue">Laporan Warga</p><p className="text-xs text-text-muted">JAKI Integration</p></div>
+            <ChevronRight className="h-4 w-4 text-accent-blue self-end" />
+          </Link>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="lg:col-span-2 h-[500px]">
           <LiveFeed />
         </div>
         <div className="lg:col-span-3 h-[500px]">
           <RecentViolations violations={recentViolations as any} />
+        </div>
+      </div>
+
+      {/* Digital Twin */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-heading text-base font-bold text-white flex items-center gap-2">
+            <span className="h-2 w-2 rounded-full bg-accent-cyan animate-pulse" />
+            Digital Twin — Simulasi Lalu Lintas Jakarta
+          </h2>
+          <Link href="/peta" className="text-xs text-accent-cyan hover:underline flex items-center gap-1">
+            Buka 3D Full View <ChevronRight className="h-3 w-3" />
+          </Link>
+        </div>
+        <div className="h-[420px]">
+          <TrafficSimulation3D />
         </div>
       </div>
     </div>

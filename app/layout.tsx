@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/components/providers";
@@ -18,9 +18,24 @@ const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
 });
 
+export const viewport: Viewport = {
+  themeColor: "#3b82f6",
+};
+
 export const metadata: Metadata = {
-  title: "SmartFlow AI - VISTA",
-  description: "Intelligent traffic enforcement system for Jakarta Transportation Agency",
+  title: "VISTA SmartFlow AI — Dishub DKI Jakarta",
+  description: "Sistem Pemantauan & Penegakan Hukum Lalu Lintas Berbasis AI untuk Dinas Perhubungan DKI Jakarta",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "VISTA AI",
+  },
+  openGraph: {
+    title: "VISTA SmartFlow AI",
+    description: "ITS Platform untuk Dishub DKI Jakarta",
+    type: "website",
+  },
 };
 
 export default function RootLayout({

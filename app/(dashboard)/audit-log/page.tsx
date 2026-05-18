@@ -160,9 +160,34 @@ export default function AuditLogPage() {
             <span className="text-sm font-semibold text-text-secondary">
               LOG AKTIVITAS {loading ? "(Memuat...)" : `(${data?.total ?? 0} entri)`}
             </span>
-            <button className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-white transition-colors">
+            <button
+              onClick={async () => {
+                const res = await fetch(`/api/audit-log?page=1&limit=1000`);
+                const json = await res.json();
+                const logs = json.logs ?? [];
+                const header = "Waktu,Event,Pelaku,Target,Detail";
+                const rows = logs.map((l: any) =>
+                  [
+                    new Date(l.createdAt).toLocaleString("id-ID"),
+                    l.event,
+                    l.details?.userEmail ?? l.details?.userId ?? "System",
+                    l.details?.targetId ?? "-",
+                    `"${(l.details?.details ?? "-").replace(/"/g, '""')}"`,
+                  ].join(",")
+                );
+                const csv = "\uFEFF" + [header, ...rows].join("\n");
+                const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = `audit_log_${new Date().toISOString().slice(0, 10)}.csv`;
+                a.click();
+                URL.revokeObjectURL(url);
+              }}
+              className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-white transition-colors border border-border rounded px-2.5 py-1 hover:bg-bg-tertiary"
+            >
               <Download className="h-3.5 w-3.5" />
-              Export Log
+              Export CSV
             </button>
           </div>
 
