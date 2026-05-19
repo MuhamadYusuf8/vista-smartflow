@@ -16,8 +16,13 @@ Peningkatan untuk implementasi skala Jakarta:
    - Crop region plat, OCR → kirim ke API
 
 Cara jalankan:
-  pip install ultralytics easyocr opencv-python requests numpy
+  pip install ultralytics easyocr opencv-python-headless requests numpy
   python ai_engine.py
+
+Mode Headless (tanpa GUI):
+  Jika OpenCV tidak support display window, engine tetap berjalan.
+  Frame preview akan disimpan ke: output/preview_latest.jpg (update tiap detik)
+  Pelanggaran tetap dikirim ke dashboard jika server aktif.
 """
 
 import cv2
@@ -26,9 +31,42 @@ import random
 import time
 import base64
 import re
+import os
+import json
 import numpy as np
 from datetime import datetime
 from ultralytics import YOLO
+
+# ============================================================
+# CEK KEMAMPUAN GUI (headless detection)
+# ============================================================
+GUI_AVAILABLE = False
+try:
+    test_img = np.zeros((10, 10, 3), dtype=np.uint8)
+    cv2.imshow("_test", test_img)
+    cv2.waitKey(1)
+    cv2.destroyWindow("_test")
+    GUI_AVAILABLE = True
+except Exception:
+    GUI_AVAILABLE = False
+
+if not GUI_AVAILABLE:
+    print("ℹ️  Mode Headless aktif — tidak ada jendela GUI.")
+    print("   Preview disimpan ke: output/preview_latest.jpg")
+    os.makedirs("output", exist_ok=True)
+
+# Antrian offline: simpan pelanggaran jika server tidak aktif
+offline_queue = []
+OFFLINE_QUEUE_FILE = "output/offline_queue.json"
+if os.path.exists(OFFLINE_QUEUE_FILE):
+    try:
+        with open(OFFLINE_QUEUE_FILE, "r") as f:
+            offline_queue = json.load(f)
+        print(f"📦 Memuat {len(offline_queue)} pelanggaran dari antrian offline.")
+    except Exception:
+        offline_queue = []
+
+last_preview_save = 0  # throttle preview save
 
 # ============================================================
 # KONFIGURASI SISTEM
@@ -162,48 +200,124 @@ except ImportError:
     print("   Saat ini menggunakan mode demo (plat deterministik).")
 
 
+# Regex format plat Indonesia: huruf(1-2) spasi angka(1-4) spasi huruf(0-3)
+# Contoh: B 1234 CD, AB 5678 F, D 99 ABC
+_PLATE_RE = re.compile(r'^[A-Z]{1,2}\s?\d{1,4}\s?[A-Z]{0,3}$')
+
+
+def _preprocess_plate(crop: np.ndarray) -> list:
+    """
+    Buat beberapa variasi preprocessing dari 1 crop gambar.
+    Makin banyak variasi, makin besar peluang OCR berhasil baca.
+    """
+    results = []
+    # Upscale 3x dulu
+    h, w = crop.shape[:2]
+    if w < 10 or h < 5:
+        return results
+    big = cv2.resize(crop, (max(w * 3, 120), max(h * 3, 40)), interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+
+    # Variasi 1: CLAHE (bagus untuk malam/gelap)
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(4, 4))
+    v1 = clahe.apply(gray)
+    results.append(v1)
+
+    # Variasi 2: Otsu threshold
+    _, v2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    results.append(v2)
+
+    # Variasi 3: Adaptive threshold (bagus untuk pencahayaan tidak merata)
+    v3 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                cv2.THRESH_BINARY, 15, 4)
+    results.append(v3)
+
+    # Variasi 4: Invert (plat gelap dengan tulisan terang)
+    v4 = cv2.bitwise_not(v2)
+    results.append(v4)
+
+    return results
+
+
+def _score_plate(text: str) -> int:
+    """Nilai seberapa 'valid' sebuah teks sebagai plat Indonesia. Makin tinggi makin baik."""
+    t = re.sub(r'\s+', ' ', text.strip())
+    if len(t) < 4:
+        return 0
+    score = 0
+    # Ada huruf dan angka?
+    if re.search(r'[A-Z]', t): score += 2
+    if re.search(r'\d', t):   score += 2
+    # Cocok format plat Indonesia?
+    if _PLATE_RE.match(t):    score += 5
+    # Panjang ideal plat (5–9 karakter)
+    if 5 <= len(t) <= 9:      score += 2
+    return score
+
+
 def read_plate_ocr(frame: np.ndarray, box: tuple) -> str | None:
     """
     Baca plat nomor dari region kendaraan menggunakan EasyOCR.
+    Strategi multi-region: coba 4 posisi crop, ambil hasil terbaik.
     Mengembalikan string plat jika terdeteksi, atau None jika gagal.
     """
     if not anpr_available or ocr_reader is None:
         return None
 
     x1, y1, x2, y2 = [int(v) for v in box]
-    # Ambil 30% bawah bounding box (area plat biasanya di bumper)
-    plate_y1 = y1 + int((y2 - y1) * 0.6)
-    plate_crop = frame[plate_y1:y2, x1:x2]
+    h_box = y2 - y1
+    w_box = x2 - x1
 
-    if plate_crop.size == 0:
+    if h_box < 20 or w_box < 20:
         return None
 
-    try:
-        # Preprocessing: grayscale + sharpen
-        gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
-        gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Scan 4 area crop berbeda agar tidak miss posisi plat
+    regions = [
+        frame[y1 + int(h_box * 0.60): y2,               x1: x2],              # 40% bawah
+        frame[y1 + int(h_box * 0.70): y2,               x1: x2],              # 30% bawah
+        frame[y1 + int(h_box * 0.50): y1 + int(h_box * 0.85), x1: x2],       # tengah-bawah
+        frame[y1 + int(h_box * 0.55): y2,               x1 + int(w_box*0.1): x2 - int(w_box*0.1)],  # bawah, crop sisi
+    ]
 
-        results = ocr_reader.readtext(thresh, detail=0, allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ")
-        if results:
-            raw = " ".join(results).upper().strip()
-            # Filter noise: minimal 3 karakter, ada huruf dan angka
-            cleaned = re.sub(r'[^A-Z0-9\s]', '', raw).strip()
-            if len(cleaned) >= 4:
-                return cleaned[:12]  # max 12 karakter
-    except Exception:
-        pass
+    best_text  = None
+    best_score = 0
+
+    for crop in regions:
+        if crop.size == 0:
+            continue
+        for processed in _preprocess_plate(crop):
+            try:
+                res = ocr_reader.readtext(
+                    processed,
+                    detail=0,
+                    allowlist="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ",
+                    min_size=10,
+                    text_threshold=0.6,
+                    low_text=0.3,
+                )
+                if not res:
+                    continue
+                raw     = " ".join(res).upper().strip()
+                cleaned = re.sub(r'[^A-Z0-9\s]', '', raw).strip()
+                cleaned = re.sub(r'\s+', ' ', cleaned)
+                if len(cleaned) < 4:
+                    continue
+                score = _score_plate(cleaned)
+                if score > best_score:
+                    best_score = score
+                    best_text  = cleaned[:12]
+            except Exception:
+                continue
+
+    # Hanya return jika skor cukup layak (ada huruf + angka minimal)
+    if best_text and best_score >= 4:
+        return best_text
     return None
 
 
-def generate_plate_demo(track_id: int) -> str:
-    """Fallback demo: plat deterministik dari ID."""
-    real_plates = ["72A 339.59", "51F 986.85", "71E 002.59", "B 1234 CD", "D 5678 EF"]
-    random.seed(track_id)
-    plate = random.choice(real_plates)
-    random.seed()
-    return plate
+def generate_plate_unknown(track_id: int) -> str:
+    """Fallback jika OCR benar-benar gagal baca plat: pakai ID unik, BUKAN plat palsu."""
+    return f"TDK-TERBACA-{track_id:04d}"
 
 
 # ============================================================
@@ -260,9 +374,16 @@ def capture_evidence(frame, box, plate, track_id, violation_type="ILLEGAL_PARKIN
     try:
         filename = f"evidence_{track_id}_{int(time.time())}.jpg"
         resp = requests.post(EVIDENCE_UPLOAD_URL,
-                             json={"image_base64": b64_image, "filename": filename}, timeout=30)
+                             json={"image_base64": b64_image, "filename": filename}, timeout=10)
         if resp.status_code == 201:
             return resp.json().get("url")
+    except requests.exceptions.ConnectionError:
+        # Server tidak aktif — simpan evidence lokal
+        local_path = f"output/{filename}"
+        with open(local_path, "wb") as f:
+            f.write(buffer.tobytes())
+        print(f"   💾 Bukti disimpan lokal: {local_path}")
+        return f"local://{local_path}"
     except Exception as e:
         print(f"❌ Error upload bukti: {e}")
     return None
@@ -271,6 +392,8 @@ def capture_evidence(frame, box, plate, track_id, violation_type="ILLEGAL_PARKIN
 def send_violation(camera_id, violation_type, plate, vehicle_class, confidence,
                    location, evidence_url=None, lat=None, lng=None):
     """Kirim data pelanggaran ke API Dashboard."""
+    global offline_queue
+
     payload = {
         "camera_id": camera_id,
         "type": violation_type,
@@ -281,17 +404,54 @@ def send_violation(camera_id, violation_type, plate, vehicle_class, confidence,
         "lat": lat or (-6.1944 + (random.random() - 0.5) * 0.002),
         "lng": lng or (106.8229 + (random.random() - 0.5) * 0.002),
         "evidence_url": evidence_url,
+        "timestamp": datetime.now().isoformat(),
     }
+
+    # Coba kirim antrian offline dulu
+    if offline_queue:
+        _flush_offline_queue()
+
     try:
-        response = requests.post(API_URL, json=payload, timeout=10)
+        response = requests.post(API_URL, json=payload, timeout=5)
         if response.status_code == 201:
             print(f"  ✅ Terkirim ke Dashboard: {violation_type} | {plate}")
             return True
         else:
-            print(f"  ⚠️ API Error: {response.status_code}")
+            print(f"  ⚠️ API Error {response.status_code}: {response.text[:100]}")
+    except requests.exceptions.ConnectionError:
+        # Server belum aktif → simpan ke antrian offline
+        offline_queue.append(payload)
+        try:
+            with open(OFFLINE_QUEUE_FILE, "w") as f:
+                json.dump(offline_queue, f, indent=2)
+        except Exception:
+            pass
+        print(f"  📦 [OFFLINE] Disimpan ke antrian ({len(offline_queue)} item). Jalankan Next.js untuk sync.")
     except Exception as e:
-        print(f"  ❌ Koneksi gagal: {e}")
+        print(f"  ❌ Koneksi gagal: {type(e).__name__}: {e}")
     return False
+
+
+def _flush_offline_queue():
+    """Coba kirim semua pelanggaran yang tersimpan saat offline."""
+    global offline_queue
+    if not offline_queue:
+        return
+    sent = []
+    for payload in offline_queue:
+        try:
+            response = requests.post(API_URL, json=payload, timeout=5)
+            if response.status_code == 201:
+                sent.append(payload)
+        except requests.exceptions.ConnectionError:
+            break  # Server masih tidak aktif
+        except Exception:
+            break
+    if sent:
+        offline_queue = [p for p in offline_queue if p not in sent]
+        with open(OFFLINE_QUEUE_FILE, "w") as f:
+            json.dump(offline_queue, f, indent=2)
+        print(f"  ✅ Sync offline: {len(sent)} pelanggaran terkirim. Sisa: {len(offline_queue)}")
 
 
 # ============================================================
@@ -394,7 +554,7 @@ while cap.isOpened():
 
                 if time_spent >= MAX_STOP_SECONDS and track_id not in ticketed_vehicles:
                     # ANPR
-                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
 
                     last_time = ticketed_plates.get(plate, 0)
                     if current_time - last_time < PLATE_COOLDOWN_SECONDS:
@@ -418,7 +578,7 @@ while cap.isOpened():
             if is_in_busway_zone and class_name != 'bus':
                 busway_key = f"busway_{track_id}"
                 if busway_key not in ticketed_vehicles:
-                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
                     last_time = ticketed_plates.get(plate + "_busway", 0)
 
                     if current_time - last_time > 300:  # cooldown 5 menit per plat
@@ -438,7 +598,7 @@ while cap.isOpened():
             if gage.is_enforced and class_name in ['car', 'truck']:
                 gage_key = f"gage_{track_id}"
                 if gage_key not in ticketed_vehicles:
-                    plate = read_plate_ocr(frame, box) or generate_plate_demo(track_id)
+                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
                     if gage.is_plate_violating(plate):
                         last_time = ticketed_plates.get(plate + "_gage", 0)
                         if current_time - last_time > 3600:  # cooldown 1 jam
@@ -450,13 +610,24 @@ while cap.isOpened():
                             ticketed_plates[plate + "_gage"] = current_time
                             ticketed_vehicles.add(gage_key)
 
-    # Resize untuk display
+    # Resize untuk display / simpan preview
     frame_resized = cv2.resize(annotated_frame, (1024, 576))
-    cv2.imshow("VISTA AI Engine v2.0 — SmartFlow Jakarta", frame_resized)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+    if GUI_AVAILABLE:
+        cv2.imshow("VISTA AI Engine v2.0 — SmartFlow Jakarta", frame_resized)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+    else:
+        # Mode headless: simpan preview tiap ~1 detik
+        now_ts = time.time()
+        if now_ts - last_preview_save >= 1.0:
+            cv2.imwrite("output/preview_latest.jpg", frame_resized)
+            last_preview_save = now_ts
 
 cap.release()
-cv2.destroyAllWindows()
+if GUI_AVAILABLE:
+    cv2.destroyAllWindows()
 print("\n✅ Sistem AI dimatikan dengan aman.")
+if offline_queue:
+    print(f"⚠️  {len(offline_queue)} pelanggaran masih di antrian offline.")
+    print(f"   Jalankan 'npm run dev' lalu jalankan ulang ai_engine.py untuk sync.")
