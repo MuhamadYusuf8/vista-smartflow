@@ -59,17 +59,25 @@ export function Sidebar() {
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-72 flex-col border-r border-border bg-bg-secondary hidden md:flex">
       {/* Logo Area */}
-      <div className="flex h-16 items-center px-6 border-b border-border">
+      <div className="flex h-16 items-center px-6 border-b border-border relative">
+        {/* Subtle accent top line */}
+        <div
+          className="absolute top-0 left-0 right-0 h-[2px]"
+          style={{ background: "linear-gradient(90deg, #3B82F6 0%, #06B6D4 50%, transparent 100%)" }}
+        />
         <div className="flex items-center gap-3">
-          <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-accent-blue/10">
+          <div className="relative flex h-8 w-8 items-center justify-center rounded-lg bg-accent-blue/10 border border-accent-blue/20">
             <div className="h-4 w-4 rounded-sm bg-accent-blue shadow-[var(--glow-blue)] animate-pulse-dot" />
           </div>
           <span className="font-heading text-xl font-bold tracking-tight text-white">SmartFlow AI</span>
         </div>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-4">
+      {/* Navigation — premium thin scrollbar */}
+      <nav
+        className="flex-1 px-3 py-4 overflow-y-auto space-y-4"
+        style={{ scrollbarWidth: "thin", scrollbarColor: "#1E3A5F #0F1628" }}
+      >
         {GROUP_ORDER.map((group) => {
           const items = navItems.filter((item) => item.group === group);
           const visibleItems = items.filter((item) => !item.adminOnly || userRole === "ADMIN");

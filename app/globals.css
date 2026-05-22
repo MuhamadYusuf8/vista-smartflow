@@ -42,12 +42,50 @@
 
 * {
   border-color: var(--border);
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-inter), sans-serif;
+  overflow-x: hidden;
+}
+
+/* ─── Premium Custom Scrollbar ─────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #3B82F6 0%, #06B6D4 100%);
+  border-radius: 10px;
+  box-shadow: 0 0 6px rgba(59, 130, 246, 0.4);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #60A5FA 0%, #22D3EE 100%);
+  box-shadow: 0 0 10px rgba(59, 130, 246, 0.7);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-secondary);
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #3B82F6 var(--bg-secondary);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -76,4 +114,40 @@ h1, h2, h3, h4, h5, h6 {
 
 .animate-pulse-dot {
   animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ─── Shimmer Skeleton ──────────────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--bg-tertiary) 25%,
+    #1E2D4D 50%,
+    var(--bg-tertiary) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* ─── Glow Utilities ────────────────────────────────────────── */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.35), 0 0 40px rgba(59, 130, 246, 0.1);
+}
+
+.glow-line {
+  box-shadow: inset 0 1px 0 rgba(59, 130, 246, 0.2);
+}
+
+/* ─── Table Row Hover ───────────────────────────────────────── */
+.table-row-hover {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.table-row-hover:hover {
+  background-color: rgba(59, 130, 246, 0.04);
+  box-shadow: inset 3px 0 0 #3B82F6;
 }

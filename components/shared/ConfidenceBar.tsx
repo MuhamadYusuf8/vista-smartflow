@@ -1,31 +1,62 @@
 import { cn } from "@/lib/utils";
 
 interface ConfidenceBarProps {
-  confidence: number; // 0.0 to 1.0 (or 0 to 100 if passed incorrectly, we'll handle both)
+  confidence: number; // 0.0–1.0 or 0–100
   showLabel?: boolean;
   className?: string;
 }
 
 export function ConfidenceBar({ confidence, showLabel = true, className }: ConfidenceBarProps) {
-  // Normalize confidence to 0-100 percentage
-  const percentage = confidence <= 1 ? Math.round(confidence * 100) : confidence;
+  const percentage = confidence <= 1 ? Math.round(confidence * 100) : Math.round(confidence);
 
-  let colorClass = "bg-accent-red";
-  if (percentage >= 90) colorClass = "bg-accent-green";
-  else if (percentage >= 75) colorClass = "bg-accent-amber";
+  // Color config based on score
+  const config =
+    percentage >= 90
+      ? {
+          bar: "from-accent-green to-emerald-400",
+          glow: "rgba(16,185,129,0.5)",
+          text: "text-accent-green",
+          track: "bg-accent-green/10",
+        }
+      : percentage >= 75
+      ? {
+          bar: "from-accent-amber to-yellow-400",
+          glow: "rgba(245,158,11,0.5)",
+          text: "text-accent-amber",
+          track: "bg-accent-amber/10",
+        }
+      : {
+          bar: "from-accent-red to-red-400",
+          glow: "rgba(239,68,68,0.5)",
+          text: "text-accent-red",
+          track: "bg-accent-red/10",
+        };
 
   return (
-    <div className={cn("flex flex-col gap-1 w-full", className)}>
+    <div className={cn("flex flex-col gap-1.5 w-full min-w-[100px]", className)}>
       {showLabel && (
-        <div className="flex justify-between text-xs">
-          <span className="text-text-muted">AI Confidence</span>
-          <span className="font-mono font-medium text-white">{percentage}%</span>
+        <div className="flex items-center justify-between gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-text-muted font-medium">
+            AI Conf.
+          </span>
+          <span className={cn("text-xs font-bold font-mono tabular-nums", config.text)}>
+            {percentage}%
+          </span>
         </div>
       )}
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary border border-border">
+
+      {/* Track */}
+      <div className={cn("relative h-1.5 w-full overflow-hidden rounded-full border border-border", config.track)}>
+        {/* Animated fill */}
         <div
-          className={cn("h-full transition-all duration-1000 ease-out", colorClass)}
-          style={{ width: `${percentage}%` }}
+          className={cn(
+            "h-full rounded-full bg-gradient-to-r transition-all duration-1000 ease-out",
+            config.bar
+          )}
+          style={{
+            width: `${percentage}%`,
+            boxShadow: `0 0 8px ${config.glow}`,
+          }}
         />
       </div>
     </div>
