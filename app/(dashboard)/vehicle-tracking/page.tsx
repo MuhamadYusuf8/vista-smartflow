@@ -34,6 +34,7 @@ interface TrackingResult {
     trackingDurationMin: number;
     estimatedRouteKm: number;
   };
+  _source?: string;
 }
 
 interface FlaggedVehicle {
@@ -50,6 +51,7 @@ export default function VehicleTrackingPage() {
   const [plate, setPlate] = useState("");
   const [tracking, setTracking] = useState<TrackingResult | null>(null);
   const [flaggedVehicles, setFlaggedVehicles] = useState<FlaggedVehicle[]>([]);
+  const [listSource, setListSource] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [listLoading, setListLoading] = useState(true);
 
@@ -59,6 +61,7 @@ export default function VehicleTrackingPage() {
       const res = await fetch("/api/vehicle-tracking?flagged=true");
       const json = await res.json();
       setFlaggedVehicles(json.trackedVehicles ?? []);
+      setListSource(json._source ?? null);
     } finally {
       setListLoading(false);
     }
@@ -134,9 +137,21 @@ export default function VehicleTrackingPage() {
           {/* Flagged Vehicles */}
           <div className="rounded-xl border border-border bg-bg-secondary overflow-hidden">
             <div className="px-5 py-3 border-b border-border bg-bg-tertiary flex items-center justify-between">
-              <span className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
-                Kendaraan Pantau
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-text-secondary uppercase tracking-wider">
+                  Kendaraan Pantau
+                </span>
+                {listSource && (
+                  <span className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] font-bold border",
+                    listSource.includes("DB_Live")
+                      ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                      : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+                  )}>
+                    {listSource.includes("DB_Live") ? "🟢 Live DB" : "🟡 Demo DB"}
+                  </span>
+                )}
+              </div>
               <span className="rounded-full bg-accent-red/10 border border-accent-red/20 px-2 py-0.5 text-xs font-medium text-accent-red">
                 {flaggedVehicles.length}
               </span>
@@ -195,11 +210,21 @@ export default function VehicleTrackingPage() {
               )}>
                 <div className="flex items-center justify-between mb-3">
                   <div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 flex-wrap">
                       <span className="font-mono text-2xl font-bold text-white">{tracking.plate}</span>
                       {tracking.isFlagged && (
                         <span className="rounded-full bg-accent-red/20 border border-accent-red/30 px-2.5 py-1 text-xs font-bold text-accent-red">
                           ⚠️ PANTAU
+                        </span>
+                      )}
+                      {tracking._source && (
+                        <span className={cn(
+                          "rounded-full px-2.5 py-1 text-xs font-bold border",
+                          tracking._source.includes("DB_Live")
+                            ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                            : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+                        )}>
+                          {tracking._source.includes("DB_Live") ? "🟢 Live DB Sighting" : "🟡 Demo History"}
                         </span>
                       )}
                     </div>

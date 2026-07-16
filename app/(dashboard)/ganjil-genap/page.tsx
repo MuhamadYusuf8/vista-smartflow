@@ -3,9 +3,13 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Car, Clock, Shield, MapPin, CheckCircle2, XCircle,
-  AlertTriangle, RefreshCw, Calendar, Info,
+  AlertTriangle, RefreshCw, Calendar, Info, DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/lib/supabase";
+
+const GANJIL_GENAP_PAD_PER_VIOLATION = 500_000; // Rp 500.000 denda
+
 
 interface GanjilGenapResponse {
   policy: {
@@ -30,11 +34,24 @@ interface GanjilGenapResponse {
   };
 }
 
+interface GanjilGenapCapture {
+  id: string;
+  license_plate: string;
+  location: string;
+  created_at: string;
+  type: string;
+}
+
+
 export default function GanjilGenapPage() {
   const [data, setData] = useState<GanjilGenapResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [plate, setPlate] = useState("");
   const [checking, setChecking] = useState(false);
+  const [captures, setCaptures] = useState<GanjilGenapCapture[]>([]);
+  const [captureCount, setCaptureCount] = useState(0);
+  const [captureLoading, setCaptureLoading] = useState(true);
+
 
   const fetchStatus = useCallback(async (plateQuery?: string) => {
     if (!plateQuery) setLoading(true);
@@ -57,6 +74,33 @@ export default function GanjilGenapPage() {
     const interval = setInterval(() => fetchStatus(), 60000);
     return () => clearInterval(interval);
   }, [fetchStatus]);
+
+  // Fetch violations hari ini (sebagai proxy ganjil-genap captures)
+  const fetchCaptures = useCallback(async () => {
+    setCaptureLoading(true);
+    try {
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const { data: rows, count } = await supabase
+        .from("violations")
+        .select("id, license_plate, location, created_at, type", { count: "exact" })
+        .gte("created_at", todayStart.toISOString())
+        .order("created_at", { ascending: false })
+        .limit(5);
+      setCaptures(rows ?? []);
+      setCaptureCount(count ?? 0);
+    } catch {
+      // silent
+    } finally {
+      setCaptureLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCaptures();
+    const interval = setInterval(fetchCaptures, 30000);
+    return () => clearInterval(interval);
+  }, [fetchCaptures]);
 
   const handleCheck = (e: React.FormEvent) => {
     e.preventDefault();
@@ -249,6 +293,71 @@ export default function GanjilGenapPage() {
             ))
           )}
         </div>
+      </div>
+
+      {/* ─── Penangkapan Hari Ini (Cross-ref Violations) ─────────────────── */}
+      <div className="rounded-xl border border-border bg-bg-secondary overflow-hidden">
+        <div className="px-5 py-3 border-b border-border bg-bg-tertiary flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-accent-amber" />
+            Pelanggaran Terdeteksi Hari Ini
+          </h3>
+          <div className="flex items-center gap-3">
+            <span className="rounded-full px-2.5 py-1 text-xs font-bold border bg-accent-red/10 border-accent-red/20 text-accent-red">
+              {captureCount} pelanggaran
+            </span>
+            {captureCount > 0 && (
+              <span className="rounded-full px-2.5 py-1 text-xs font-bold border bg-accent-green/10 border-accent-green/20 text-accent-green flex items-center gap-1">
+                <DollarSign className="h-3 w-3" />
+                Est. PAD: Rp {((captureCount * GANJIL_GENAP_PAD_PER_VIOLATION * 0.3) / 1_000_000).toFixed(1)} Jt
+              </span>
+            )}
+          </div>
+        </div>
+        {captureLoading ? (
+          <div className="p-6 space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-10 rounded-lg bg-bg-tertiary animate-pulse" />
+            ))}
+          </div>
+        ) : captures.length === 0 ? (
+          <div className="py-10 text-center text-text-muted text-sm">
+            <CheckCircle2 className="h-8 w-8 mx-auto mb-2 opacity-20" />
+            <p>Belum ada pelanggaran terdeteksi hari ini</p>
+            <p className="text-xs mt-1">Jalankan <code className="text-accent-cyan">npm run seed:demo</code> untuk data demo</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {captures.map((c) => (
+              <div key={c.id} className="px-5 py-3 flex items-center justify-between hover:bg-bg-tertiary/40 transition-colors">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-red/10 border border-accent-red/20 flex-shrink-0">
+                    <Car className="h-4 w-4 text-accent-red" />
+                  </div>
+                  <div>
+                    <p className="font-mono font-bold text-white text-sm">{c.license_plate}</p>
+                    <p className="text-xs text-text-muted flex items-center gap-1">
+                      <MapPin className="h-3 w-3" />{c.location ?? "Lokasi tidak diketahui"}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <span className="text-xs font-bold text-accent-red rounded-full bg-accent-red/10 px-2 py-1 border border-accent-red/20">
+                    {c.type?.replace(/_/g, " ") ?? "PELANGGARAN"}
+                  </span>
+                  <p className="text-[10px] text-text-muted mt-1 font-mono">
+                    {new Date(c.created_at).toLocaleTimeString("id-ID")}
+                  </p>
+                </div>
+              </div>
+            ))}
+            {captureCount > 5 && (
+              <div className="px-5 py-3 text-center text-xs text-text-muted">
+                ...dan {captureCount - 5} pelanggaran lainnya hari ini
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Info Box */}

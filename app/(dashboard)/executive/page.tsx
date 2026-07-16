@@ -13,7 +13,7 @@ import {
 } from "recharts";
 import {
   Camera, AlertTriangle, TrendingUp, Activity, MapPin,
-  Zap, Shield, Clock, ChevronRight, Wifi, Radio,
+  Zap, Shield, Clock, ChevronRight, Wifi, Radio, Database,
 } from "lucide-react";
 
 function formatRupiah(n: number) {
@@ -58,6 +58,7 @@ export default function ExecutiveDashboard() {
   const [timeline, setTimeline] = useState(getHourlyTimeline());
   const [time, setTime] = useState(new Date());
   const [recentEvents, setRecentEvents] = useState<{ id: number; cam: string; type: string; plate: string; time: string }[]>([]);
+  const [liveSource, setLiveSource] = useState<"DB_Live" | "Simulasi">("Simulasi");
   const summary = getPilotSummary();
   const eventId = useRef(1000);
 
@@ -83,6 +84,32 @@ export default function ExecutiveDashboard() {
     const clockInterval = setInterval(() => {
       setTime(new Date());
     }, 1000);
+
+    // ── Fetch traffic metrics live dari DB ──────────────────────────────────
+    async function fetchLiveMetrics() {
+      try {
+        const res = await fetch("/api/traffic-metrics?hours=1");
+        const json = await res.json();
+        if (json.cameras && json.cameras.length > 0) {
+          const city = json.city_summary;
+          const cams = json.cameras as { avg_vehicles: number; avg_speed: number | null; avg_congestion: number }[];
+          const avgVehicles = Math.round(cams.reduce((s: number, c) => s + c.avg_vehicles, 0));
+          const avgSpd      = cams.find((c) => c.avg_speed !== null)?.avg_speed ?? null;
+          const avgCong     = city.avg_congestion as number;
+
+          setVolume(avgVehicles > 0 ? avgVehicles : getVolumePerHour());
+          if (avgSpd !== null) setSpeed(avgSpd);
+          setCongestion(Math.round(avgCong * 100));
+          // Estimasi delay: setiap 10% kemacetan = ~+2 menit
+          setLossTime(Math.round(avgCong * 20));
+          setLiveSource("DB_Live");
+        }
+      } catch {
+        // Fallback simulasi tetap berjalan
+      }
+    }
+    fetchLiveMetrics();
+    const liveInterval = setInterval(fetchLiveMetrics, 60000);
 
     // Violation counter increment (1 setiap ~6 detik di jam sibuk)
     const factor = getCongestionFactor();
@@ -112,6 +139,7 @@ export default function ExecutiveDashboard() {
 
     return () => {
       clearInterval(clockInterval);
+      clearInterval(liveInterval);
       clearInterval(violationInterval);
       clearInterval(metricsInterval);
     };
@@ -149,6 +177,17 @@ export default function ExecutiveDashboard() {
             <Radio className="h-3 w-3 text-accent-blue" />
             <span className="text-xs font-semibold text-accent-blue">
               {CORRIDOR_CAMERAS.filter((c) => c.status === "ACTIVE").length} Kamera Aktif
+            </span>
+          </div>
+          {/* Live DB Badge */}
+          <div className={`flex items-center gap-1.5 rounded-full border px-3 py-1 ${
+            liveSource === "DB_Live"
+              ? "border-accent-green/30 bg-accent-green/10"
+              : "border-accent-amber/30 bg-accent-amber/10"
+          }`}>
+            <Database className={`h-3 w-3 ${liveSource === "DB_Live" ? "text-accent-green" : "text-accent-amber"}`} />
+            <span className={`text-xs font-semibold ${liveSource === "DB_Live" ? "text-accent-green" : "text-accent-amber"}`}>
+              {liveSource === "DB_Live" ? "🟢 Live DB" : "🟡 Simulasi"}
             </span>
           </div>
         </div>

@@ -11,7 +11,9 @@
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force && npm run db:seed"
+    "db:reset": "prisma migrate reset --force && npm run db:seed",
+    "seed:demo": "npx dotenv-cli -e .env.local -- npx tsx scripts/seed-demo.ts",
+    "seed:demo:clear": "npx dotenv-cli -e .env.local -- npx tsx scripts/seed-demo.ts --clear"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",

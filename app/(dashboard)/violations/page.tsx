@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useTransition } from "react";
 import {
   Filter, Download, FileText, ChevronLeft, ChevronRight,
   Search, X, RefreshCw, ShieldAlert, CheckCircle2,
-  Clock, Ban, TrendingUp,
+  Clock, Ban, TrendingUp, Send, RotateCcw, Eye,
 } from "lucide-react";
 import { LicensePlate } from "@/components/shared/LicensePlate";
 import { StatusBadge } from "@/components/shared/StatusBadge";
@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
-import { supabase, Violation } from "@/lib/supabase";
+import { supabase, Violation, ViolationStatus } from "@/lib/supabase";
 
 const PAGE_SIZE = 15;
 
@@ -46,13 +46,13 @@ const STATUS_FILTERS: { label: string; value: FilterStatus }[] = [
 
 const COL_HEADERS = [
   { label: "TANGGAL & WAKTU", width: "w-44" },
-  { label: "PLAT NOMOR", width: "w-36" },
+  { label: "PLAT NOMOR",      width: "w-36" },
   { label: "JENIS PELANGGARAN", width: "w-44" },
-  { label: "LOKASI", width: "w-56" },
-  { label: "DURASI", width: "w-24" },
-  { label: "CONFIDENCE", width: "w-36" },
-  { label: "STATUS", width: "w-36" },
-  { label: "AKSI", width: "w-28" },
+  { label: "LOKASI",          width: "w-56" },
+  { label: "DURASI",          width: "w-24" },
+  { label: "CONFIDENCE",      width: "w-36" },
+  { label: "STATUS",          width: "w-36" },
+  { label: "AKSI",            width: "w-44" },  // diperlebar untuk action buttons
 ];
 
 // ─── Mini stat card ──────────────────────────────────────────────────
@@ -116,6 +116,15 @@ export default function ViolationsPage() {
   const [statusFilter, setStatusFilter] = useState<FilterStatus>("ALL");
   const [showFilters, setShowFilters] = useState(false);
   const [exportLoading, setExportLoading] = useState<"csv" | "pdf" | null>(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null); // violation id yang sedang diproses
+  const [toast, setToast]     = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [, startTransition]   = useTransition();
+
+  // Helper: tampilkan toast sementara
+  const showToast = (msg: string, type: "ok" | "err" = "ok") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   // Debounce search
   useEffect(() => {
@@ -204,6 +213,35 @@ export default function ViolationsPage() {
     }
   };
 
+  // ─── Ubah status pelanggaran (verifikasi / export E-TLE / tolak) ───
+  const handleStatusChange = async (id: string, newStatus: string, label: string) => {
+    setActionLoading(id);
+    try {
+      const res = await fetch(`/api/violations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.error ?? `Gagal ${label}`, "err");
+        return;
+      }
+      // Optimistic update di list
+      setViolations((prev) =>
+        prev.map((v) => v.id === id ? { ...v, status: newStatus as ViolationStatus, etle_ref: data.etle_ref ?? v.etle_ref } : v)
+      );
+      showToast(`✅ ${label} berhasil — ${data.license_plate}`, "ok");
+      // Refresh stats counter
+      startTransition(() => { fetchViolations(); });
+    } catch (err) {
+      console.error("Status change error:", err);
+      showToast(`Gagal mengubah status`, "err");
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // Generate page numbers with ellipsis
   const getPageNumbers = () => {
     const pages: (number | "...")[] = [];
@@ -221,9 +259,23 @@ export default function ViolationsPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-6 relative">
+
+      {/* ── Toast Notifikasi ──────────────────────────────────── */}
+      {toast && (
+        <div className={cn(
+          "fixed top-5 right-5 z-[9999] flex items-center gap-3 rounded-xl border px-4 py-3 shadow-2xl backdrop-blur-sm",
+          "animate-in slide-in-from-top-3 duration-300",
+          toast.type === "ok"
+            ? "border-accent-green/30 bg-bg-secondary text-accent-green"
+            : "border-accent-red/30 bg-bg-secondary text-accent-red"
+        )}>
+          <span className="text-sm font-semibold">{toast.msg}</span>
+        </div>
+      )}
 
       {/* ── Header ──────────────────────────────────────────────── */}
+
       <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <div className="flex items-center gap-3 mb-1">
@@ -525,13 +577,83 @@ export default function ViolationsPage() {
                     </td>
 
                     {/* Aksi */}
-                    <td className="px-5 py-3.5 text-right">
-                      <Link
-                        href={`/violations/${v.id}`}
-                        className="inline-flex items-center justify-center rounded-lg border border-accent-blue/30 bg-accent-blue/10 px-3 py-1.5 text-[11px] font-bold text-accent-blue transition-all hover:border-accent-blue/70 hover:bg-accent-blue/20 hover:shadow-[0_0_12px_rgba(59,130,246,0.25)] whitespace-nowrap"
-                      >
-                        Lihat Detail →
-                      </Link>
+                    <td className="px-5 py-3.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {/* PENDING → tombol Verifikasi */}
+                        {v.status === "PENDING" && (
+                          <button
+                            id={`btn-verify-${v.id}`}
+                            onClick={() => handleStatusChange(v.id, "VERIFIED", "Verifikasi")}
+                            disabled={actionLoading === v.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-accent-green/40 bg-accent-green/10 px-2.5 py-1.5 text-[11px] font-bold text-accent-green transition-all hover:border-accent-green/70 hover:bg-accent-green/20 disabled:opacity-50"
+                            title="Verifikasi pelanggaran ini"
+                          >
+                            {actionLoading === v.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
+                            Verifikasi
+                          </button>
+                        )}
+                        {/* PENDING → tombol Tolak */}
+                        {v.status === "PENDING" && (
+                          <button
+                            id={`btn-dismiss-${v.id}`}
+                            onClick={() => handleStatusChange(v.id, "DISMISSED", "Tolak")}
+                            disabled={actionLoading === v.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-bold text-text-muted transition-all hover:border-accent-red/40 hover:text-accent-red disabled:opacity-50"
+                            title="Tolak pelanggaran ini"
+                          >
+                            <X className="h-3 w-3" />Tolak
+                          </button>
+                        )}
+                        {/* VERIFIED → tombol Export E-TLE */}
+                        {v.status === "VERIFIED" && (
+                          <button
+                            id={`btn-export-${v.id}`}
+                            onClick={() => handleStatusChange(v.id, "EXPORTED", "Export E-TLE")}
+                            disabled={actionLoading === v.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-accent-blue/40 bg-accent-blue/10 px-2.5 py-1.5 text-[11px] font-bold text-accent-blue transition-all hover:border-accent-blue/70 hover:bg-accent-blue/20 disabled:opacity-50"
+                            title="Kirim ke sistem E-TLE"
+                          >
+                            {actionLoading === v.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                            E-TLE
+                          </button>
+                        )}
+                        {/* VERIFIED → tolak */}
+                        {v.status === "VERIFIED" && (
+                          <button
+                            id={`btn-dismiss2-${v.id}`}
+                            onClick={() => handleStatusChange(v.id, "DISMISSED", "Tolak")}
+                            disabled={actionLoading === v.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-bold text-text-muted transition-all hover:border-accent-red/40 hover:text-accent-red disabled:opacity-50"
+                          >
+                            <X className="h-3 w-3" />Tolak
+                          </button>
+                        )}
+                        {/* EXPORTED → badge ref E-TLE */}
+                        {v.status === "EXPORTED" && (
+                          <span className="font-mono text-[10px] text-accent-cyan border border-accent-cyan/20 bg-accent-cyan/10 px-2 py-1 rounded-lg">
+                            {(v as Violation & { etle_ref?: string }).etle_ref ?? "E-TLE"}
+                          </span>
+                        )}
+                        {/* DISMISSED → re-open */}
+                        {v.status === "DISMISSED" && (
+                          <button
+                            id={`btn-reopen-${v.id}`}
+                            onClick={() => handleStatusChange(v.id, "PENDING", "Re-open")}
+                            disabled={actionLoading === v.id}
+                            className="inline-flex items-center gap-1 rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-bold text-text-muted transition-all hover:border-accent-amber/40 hover:text-accent-amber disabled:opacity-50"
+                          >
+                            <RotateCcw className="h-3 w-3" />Re-open
+                          </button>
+                        )}
+                        {/* Lihat Detail — selalu tampil */}
+                        <Link
+                          href={`/violations/${v.id}`}
+                          className="inline-flex items-center justify-center rounded-lg border border-border bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-bold text-text-secondary transition-all hover:border-accent-blue/40 hover:text-accent-blue"
+                          title="Lihat detail"
+                        >
+                          <Eye className="h-3 w-3" />
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))

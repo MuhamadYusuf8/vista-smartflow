@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useTransition } from "react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { ViolationChart } from "@/components/dashboard/ViolationChart";
 import { VehicleTypeChart } from "@/components/dashboard/VehicleTypeChart";
@@ -12,7 +12,8 @@ import TrafficSimulation3D from "@/components/TrafficSimulation3D";
 import { useRealtimeViolations } from "@/hooks/useRealtime";
 import { supabase } from "@/lib/supabase";
 import Link from "next/link";
-import { Car, DollarSign, Navigation, Users, ChevronRight } from "lucide-react";
+import { Car, DollarSign, Navigation, Users, ChevronRight, Activity, BrainCircuit } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // Data awal Tren
 const initialHourlyData = [
@@ -35,11 +36,29 @@ const initialVehicleData = [
 export default function Dashboard() {
   const [totalViolationsToday, setTotalViolationsToday] = useState(0);
   const [recentViolations, setRecentViolations] = useState<any[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [, startTransition] = useTransition();
   
   // State Dinamis
   const [vehicleData, setVehicleData] = useState(initialVehicleData);
   const [hourlyData, setHourlyData] = useState(initialHourlyData);
   const [avgConfidence, setAvgConfidence] = useState(98.5); 
+
+  // State Kamera & Traffic live
+  const [activeCams, setActiveCams] = useState<{ active: number; total: number } | null>(null);
+  const [cityTraffic, setCityTraffic] = useState<{
+    level: string; score: number; color: string;
+    cameras: { name: string; congestion: number; count: number }[];
+    _source: string;
+  } | null>(null);
+
+  // State AI Insights
+  const [aiInsights, setAiInsights] = useState<{
+    pad_today_rp: number;
+    _source: string;
+    ai_insights: { icon: string; level: string; title: string; body: string }[];
+    violations: { today: number };
+  } | null>(null);
   
   // State Alert
   const [hasCriticalAlert, setHasCriticalAlert] = useState(false);
@@ -114,6 +133,59 @@ export default function Dashboard() {
     };
 
     fetchDashboardData();
+  }, []);
+
+  // ── Fetch kamera aktif dan traffic metrics live ───────────────────────────
+  useEffect(() => {
+    async function fetchLiveMetrics() {
+      // Kamera aktif dari DB
+      const { data: camsAll } = await supabase.from("cameras").select("status");
+      if (camsAll) {
+        setActiveCams({
+          active: camsAll.filter((c) => c.status === "ACTIVE").length,
+          total: camsAll.length,
+        });
+      }
+
+      // Traffic metrics ringkasan kota
+      try {
+        const res = await fetch("/api/traffic-metrics?hours=1");
+        const json = await res.json();
+        if (json.cameras && json.cameras.length > 0) {
+          const summary = json.city_summary;
+          const cams = json.cameras as { name: string; avg_congestion: number; latest_count: number }[];
+          setCityTraffic({
+            level: summary.congestion_level,
+            score: Math.round(summary.avg_congestion * 100),
+            color: summary.avg_congestion >= 0.8 ? "#EF4444"
+              : summary.avg_congestion >= 0.55 ? "#F97316"
+              : summary.avg_congestion >= 0.3  ? "#F59E0B"
+              : "#10B981",
+            cameras: cams.map((c) => ({ name: c.name, congestion: c.avg_congestion, count: c.latest_count })),
+            _source: json._source ?? "unknown",
+          });
+        }
+      } catch {
+        // silently ignore — fallback ke null (tidak tampilkan widget)
+      }
+    }
+    fetchLiveMetrics();
+    const interval = setInterval(fetchLiveMetrics, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // ── Fetch AI Analytics Insight ───────────────────────────────────────────
+  useEffect(() => {
+    async function fetchAnalytics() {
+      try {
+        const res = await fetch("/api/analytics");
+        const json = await res.json();
+        if (json.ai_insights) setAiInsights(json);
+      } catch { /* silent */ }
+    }
+    fetchAnalytics();
+    const interval = setInterval(fetchAnalytics, 300000); // refresh tiap 5 menit
+    return () => clearInterval(interval);
   }, []);
 
   // MENDENGARKAN DATA REALTIME DARI AI PYTHON
@@ -210,8 +282,8 @@ export default function Dashboard() {
         />
         <StatsCard
           title="Kamera Aktif"
-          value="1 / 1"
-          subtitle="CCTV Bundaran HI"
+          value={activeCams ? `${activeCams.active} / ${activeCams.total}` : "Memuat..."}
+          subtitle={activeCams ? `${activeCams.active} CCTV online` : "Mengambil data..."}
           colorTheme="blue"
           delay={0.2}
         />
@@ -224,15 +296,107 @@ export default function Dashboard() {
         />
         <StatsCard
           title="Waktu Respons Rata-rata"
-          value="1.2" 
-          subtitle="detik"
-          trend={-15.4}
+          value={aiInsights ? `Rp ${(aiInsights.pad_today_rp / 1_000_000).toFixed(1)} Jt` : "1.2"}
+          subtitle={aiInsights ? "Est. PAD hari ini" : "detik"}
+          trend={aiInsights ? undefined : -15.4}
           colorTheme="amber"
           delay={0.4}
         />
       </div>
 
       <PipelineStatus />
+
+      {/* ── City Traffic Widget ─────────────────────────────────────────── */}
+      {cityTraffic && (
+        <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+            <div className="flex items-center gap-3">
+              <Activity className="h-5 w-5 text-accent-cyan" />
+              <div>
+                <h2 className="font-heading text-base font-bold text-white">Status Lalu Lintas Kota — Real-time</h2>
+                <p className="text-xs text-text-muted">Data dari {cityTraffic.cameras.length} kamera CCTV aktif</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <span
+                className="rounded-full px-3 py-1 text-xs font-bold border"
+                style={{ color: cityTraffic.color, borderColor: `${cityTraffic.color}40`, backgroundColor: `${cityTraffic.color}15` }}
+              >
+                {cityTraffic.level} · Skor {cityTraffic.score}/100
+              </span>
+              <span className={cn(
+                "rounded-full px-2 py-1 text-[10px] font-bold border",
+                cityTraffic._source.includes("VISTA_TrafficMetrics")
+                  ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                  : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+              )}>
+                {cityTraffic._source.includes("VISTA_TrafficMetrics") ? "🟢 Live DB" : "🟡 Estimasi"}
+              </span>
+              <Link href="/traffic-forecast" className="text-xs text-accent-cyan hover:underline flex items-center gap-1">
+                Detail Forecast <ChevronRight className="h-3 w-3" />
+              </Link>
+            </div>
+          </div>
+          {/* Mini bar chart per kamera */}
+          <div className="flex items-end gap-2 h-16 overflow-x-auto pb-1">
+            {cityTraffic.cameras.map((cam) => {
+              const pct = Math.round(cam.congestion * 100);
+              const barColor = pct >= 80 ? "#EF4444" : pct >= 55 ? "#F97316" : pct >= 30 ? "#F59E0B" : "#10B981";
+              return (
+                <div key={cam.name} className="flex flex-col items-center gap-1 min-w-[48px] flex-1">
+                  <span className="text-[9px] text-text-muted font-mono">{pct}%</span>
+                  <div className="w-full rounded-t-sm flex-1 min-h-[4px]" style={{ height: `${Math.max(4, pct * 0.56)}px`, backgroundColor: barColor, opacity: 0.85 }} />
+                  <span className="text-[9px] text-text-muted truncate w-full text-center" title={cam.name}>
+                    {cam.name.replace("CCTV ", "").split(" ")[0]}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── AI City Insight Panel ─────────────────────────────────────────── */}
+      {aiInsights && aiInsights.ai_insights.length > 0 && (
+        <div className="rounded-xl border border-border bg-bg-secondary p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <BrainCircuit className="h-5 w-5 text-accent-blue" />
+              <div>
+                <h2 className="font-heading text-base font-bold text-white">AI City Intelligence</h2>
+                <p className="text-xs text-text-muted">Insight otomatis berbasis analitik lintas sistem</p>
+              </div>
+            </div>
+            <span className={cn(
+              "rounded-full px-2.5 py-1 text-[10px] font-bold border",
+              aiInsights._source === "DB_Live"
+                ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+            )}>
+              {aiInsights._source === "DB_Live" ? "🟢 Live Analysis" : "🟡 Partial Data"}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {aiInsights.ai_insights.map((insight, i) => {
+              const borderColor = insight.level === "critical" ? "border-accent-red/30 bg-accent-red/5"
+                : insight.level === "warning" ? "border-accent-amber/30 bg-accent-amber/5"
+                : "border-border bg-bg-tertiary";
+              const titleColor = insight.level === "critical" ? "text-accent-red"
+                : insight.level === "warning" ? "text-accent-amber"
+                : "text-white";
+              return (
+                <div key={i} className={cn("rounded-xl border p-4 flex flex-col gap-2", borderColor)}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">{insight.icon}</span>
+                    <p className={cn("font-semibold text-sm leading-tight", titleColor)}>{insight.title}</p>
+                  </div>
+                  <p className="text-xs text-text-muted leading-relaxed">{insight.body}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="rounded-xl border border-border bg-bg-secondary p-6 lg:col-span-3">

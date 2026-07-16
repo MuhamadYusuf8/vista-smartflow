@@ -11,17 +11,32 @@ export const authConfig: NextAuthConfig = {
   },
   pages: {
     signIn: "/login",
+    error: "/login",
   },
   providers: [
     CredentialsProvider({
+      id: "credentials",
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" },
+        role: { label: "Role", type: "text" },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
           return null;
+        }
+
+        // Validasi role yang dikirim dari form (admin → ADMIN, dst.)
+        const submittedRole = (credentials.role as string | undefined)
+          ?.toUpperCase()
+          ?.trim();
+        const validRoles = ["ADMIN", "OFFICER", "VIEWER"] as const;
+        if (
+          !submittedRole ||
+          !validRoles.includes(submittedRole as (typeof validRoles)[number])
+        ) {
+          return null; // role tidak dikenal
         }
 
         const user = await prisma.user.findUnique({
@@ -39,6 +54,12 @@ export const authConfig: NextAuthConfig = {
 
         if (!isPasswordValid) {
           return null;
+        }
+
+        // ✅ Kunci utama: role yang dipilih di UI HARUS cocok dengan
+        // role akun di database. Mencegah Officer login di tab Admin, dll.
+        if ((user.role as string) !== submittedRole) {
+          return null; // role mismatch — tolak login
         }
 
         return {

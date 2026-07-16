@@ -107,6 +107,10 @@ export default function CommandCenterPage() {
   const [dispatchDone, setDispatchDone] = useState<string | null>(null);
   const [time, setTime] = useState(new Date());
   const [stats, setStats] = useState({ total: 0, kritis: 0, ditangani: 0, responseAvg: 0 });
+  const [liveTraffic, setLiveTraffic] = useState<{
+    level: string; score: number; color: string; source: string;
+    cameras: { name: string; location: string; congestion: number; count: number }[];
+  } | null>(null);
   const incIdx = useRef(50);
 
   useEffect(() => {
@@ -116,6 +120,30 @@ export default function CommandCenterPage() {
     setSelected(initial[0]);
 
     const clockInterval = setInterval(() => setTime(new Date()), 1000);
+
+    // ── Fetch traffic metrics live ───────────────────────────────────────────────
+    async function fetchTraffic() {
+      try {
+        const res = await fetch("/api/traffic-metrics?hours=1");
+        const json = await res.json();
+        if (json.cameras && json.cameras.length > 0) {
+          const summary = json.city_summary;
+          const cams = json.cameras as { name: string; location: string; avg_congestion: number; latest_count: number }[];
+          setLiveTraffic({
+            level: summary.congestion_level,
+            score: Math.round(summary.avg_congestion * 100),
+            color: summary.avg_congestion >= 0.8 ? "#EF4444"
+              : summary.avg_congestion >= 0.55 ? "#F97316"
+              : summary.avg_congestion >= 0.3  ? "#F59E0B"
+              : "#10B981",
+            source: json._source ?? "unknown",
+            cameras: cams.map((c) => ({ name: c.name, location: c.location, congestion: c.avg_congestion, count: c.latest_count })),
+          });
+        }
+      } catch { /* silent */ }
+    }
+    fetchTraffic();
+    const trafficInterval = setInterval(fetchTraffic, 60000);
 
     // New incident every 25-40 seconds
     const incidentInterval = setInterval(() => {
@@ -132,7 +160,7 @@ export default function CommandCenterPage() {
       });
     }, 28000 + Math.random() * 12000);
 
-    return () => { clearInterval(clockInterval); clearInterval(incidentInterval); };
+    return () => { clearInterval(clockInterval); clearInterval(trafficInterval); clearInterval(incidentInterval); };
   }, []);
 
   const handleDispatch = () => {
@@ -208,12 +236,55 @@ export default function CommandCenterPage() {
         ))}
       </div>
 
-      {/* Zone Overview */}
+      {/* Zone Overview — enriched with live traffic if available */}
       <div className="rounded-xl border border-border bg-bg-secondary p-4">
-        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <MapPin className="h-4 w-4 text-accent-blue" />
-          Cakupan Wilayah — {ZONES.reduce((a, z) => a + z.cams, 0)} Kamera Aktif
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-accent-blue" />
+            Cakupan Wilayah — {ZONES.reduce((a, z) => a + z.cams, 0)} Kamera Aktif
+          </h3>
+          {liveTraffic && (
+            <span
+              className="rounded-full px-3 py-1 text-xs font-bold border"
+              style={{ color: liveTraffic.color, borderColor: `${liveTraffic.color}40`, backgroundColor: `${liveTraffic.color}15` }}
+            >
+              Kota: {liveTraffic.level} ({liveTraffic.score}/100)
+            </span>
+          )}
+        </div>
+
+        {/* Live CCTV camera congestion bars — shown if DB data available */}
+        {liveTraffic && liveTraffic.cameras.length > 0 && (
+          <div className="mb-4 p-3 rounded-lg bg-bg-tertiary border border-border">
+            <p className="text-[10px] font-bold text-text-muted uppercase tracking-wider mb-2">
+              Tingkat Kemacetan Per Kamera — Live
+              <span className={`ml-2 ${
+                liveTraffic.source.includes("VISTA_TrafficMetrics") ? "text-accent-green" : "text-accent-amber"
+              }`}>
+                {liveTraffic.source.includes("VISTA_TrafficMetrics") ? "🟢 DB Live" : "🟡 Estimasi"}
+              </span>
+            </p>
+            <div className="flex items-end gap-1.5 h-12">
+              {liveTraffic.cameras.map((cam) => {
+                const pct = Math.round(cam.congestion * 100);
+                const barColor = pct >= 80 ? "#EF4444" : pct >= 55 ? "#F97316" : pct >= 30 ? "#F59E0B" : "#10B981";
+                return (
+                  <div key={cam.name} className="flex flex-col items-center gap-0.5 flex-1">
+                    <div
+                      className="w-full rounded-t-sm"
+                      style={{ height: `${Math.max(4, pct * 0.44)}px`, backgroundColor: barColor, opacity: 0.85 }}
+                      title={`${cam.name}: ${pct}% macet, ${cam.count} kend/jam`}
+                    />
+                    <span className="text-[8px] text-text-muted truncate w-full text-center">
+                      {cam.name.replace("CCTV ", "").split(" ")[0]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-3 sm:grid-cols-7 gap-2">
           {ZONES.map((z) => {
             const zoneInc = incidents.filter((i) => i.zone === z.name && i.status !== "SELESAI").length;

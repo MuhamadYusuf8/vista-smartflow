@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Shield, Search, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Car, Clock, Database } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Shield, Search, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Car, Database } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 
 interface PlateCheck {
@@ -52,55 +52,76 @@ export default function ANPRNationalPage() {
   const [checking, setChecking] = useState(false);
   const [result, setResult] = useState<PlateCheck | null>(null);
   const [autoFeed, setAutoFeed] = useState<PlateCheck[]>([]);
-  const [totalChecked, setTotalChecked] = useState(4872);
-  const [flagged, setFlagged] = useState(97);
+  const [totalChecked, setTotalChecked] = useState(0);
+  const [flagged, setFlagged] = useState(0);
+  const [liveSource, setLiveSource] = useState<"DB_Live" | "Demo">("Demo");
+  const [feedLoading, setFeedLoading] = useState(true);
   const plateIdx = useRef(0);
 
-  useEffect(() => {
-    // Generate initial auto-feed from recent violations
-    supabase.from("violations").select("license_plate, timestamp").order("timestamp", { ascending: false }).limit(8)
-      .then(({ data }) => {
-        if (data && data.length > 0) {
-          const feed = data.map((v) => ({
-            plate: v.license_plate,
-            checkedAt: new Date(v.timestamp).toLocaleTimeString("id-ID"),
-            result: checkPlate(v.license_plate),
-          }));
-          setAutoFeed(feed);
-        } else {
-          // Fallback demo
-          setAutoFeed(DEMO_PLATES.map((p, i) => ({
-            plate: p,
-            checkedAt: new Date(Date.now() - i * 90000).toLocaleTimeString("id-ID"),
-            result: checkPlate(p),
-          })));
-        }
-      });
+  // Fetch real sightings from DB
+  const fetchSightings = useCallback(async () => {
+    setFeedLoading(true);
+    try {
+      // Ambil vehicle_sightings terbaru dari DB
+      const { data: sightings } = await supabase
+        .from("vehicle_sightings")
+        .select("license_plate, created_at, is_flagged")
+        .order("created_at", { ascending: false })
+        .limit(15);
 
-    // Auto-check new plates every 8 seconds (simulating live CCTV)
-    const iv = setInterval(() => {
-      const plate = DEMO_PLATES[plateIdx.current % DEMO_PLATES.length];
-      plateIdx.current++;
-      const res = checkPlate(plate + plateIdx.current);
-      setAutoFeed((prev) => [{ plate, checkedAt: new Date().toLocaleTimeString("id-ID"), result: res }, ...prev.slice(0, 9)]);
-      setTotalChecked((n) => n + 1);
-      if (res.polri !== "BERSIH" || res.samsat === "MATI") setFlagged((n) => n + 1);
-    }, 8000);
+      if (sightings && sightings.length >= 3) {
+        const feed = sightings.map((s) => ({
+          plate: s.license_plate,
+          checkedAt: new Date(s.created_at).toLocaleTimeString("id-ID"),
+          result: checkPlate(s.license_plate),
+        }));
+        setAutoFeed(feed);
+        setLiveSource("DB_Live");
+      } else {
+        // Fallback ke demo jika DB kosong
+        setAutoFeed(DEMO_PLATES.map((p, i) => ({
+          plate: p,
+          checkedAt: new Date(Date.now() - i * 90000).toLocaleTimeString("id-ID"),
+          result: checkPlate(p),
+        })));
+        setLiveSource("Demo");
+      }
 
-    return () => clearInterval(iv);
+      // Hitung total sightings & flagged hari ini
+      const todayStart = new Date();
+      todayStart.setHours(0, 0, 0, 0);
+      const [totalRes, flaggedRes] = await Promise.all([
+        supabase.from("vehicle_sightings").select("*", { count: "exact", head: true }).gte("created_at", todayStart.toISOString()),
+        supabase.from("vehicle_sightings").select("*", { count: "exact", head: true }).eq("is_flagged", true).gte("created_at", todayStart.toISOString()),
+      ]);
+      if (totalRes.count !== null) setTotalChecked(totalRes.count);
+      if (flaggedRes.count !== null) setFlagged(flaggedRes.count);
+    } catch {
+      setAutoFeed(DEMO_PLATES.map((p, i) => ({
+        plate: p,
+        checkedAt: new Date(Date.now() - i * 90000).toLocaleTimeString("id-ID"),
+        result: checkPlate(p),
+      })));
+    } finally {
+      setFeedLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchSightings();
+    const interval = setInterval(fetchSightings, 30000); // Refresh tiap 30 detik
+    return () => clearInterval(interval);
+  }, [fetchSightings]);
 
   const handleCheck = async (plate?: string) => {
     const target = (plate ?? searchPlate).toUpperCase().trim();
     if (!target) return;
     setChecking(true);
-    await new Promise((r) => setTimeout(r, 1200)); // simulate API latency
+    await new Promise((r) => setTimeout(r, 900)); // simulate API latency
     const res = checkPlate(target);
     const checked: PlateCheck = { plate: target, checkedAt: new Date().toLocaleTimeString("id-ID"), result: res };
     setResult(checked);
     setAutoFeed((prev) => [checked, ...prev.slice(0, 9)]);
-    setTotalChecked((n) => n + 1);
-    if (res.polri !== "BERSIH" || res.samsat === "MATI") setFlagged((n) => n + 1);
     setChecking(false);
   };
 
@@ -120,13 +141,21 @@ export default function ANPRNationalPage() {
           <p className="text-sm text-text-muted">Pengecekan plat nomor real-time ke database Polri, SAMSAT, dan DPO Nasional</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Live source badge */}
+          <span className={`rounded-full px-3 py-1 text-xs font-bold border ${
+            liveSource === "DB_Live"
+              ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+              : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+          }`}>
+            {liveSource === "DB_Live" ? "🟢 Live Sightings DB" : "🟡 Demo Feed"}
+          </span>
           <div className="text-right">
-            <p className="text-2xl font-bold text-accent-cyan">{totalChecked.toLocaleString("id-ID")}</p>
-            <p className="text-xs text-text-muted">Plat dicek hari ini</p>
+            <p className="text-2xl font-bold text-accent-cyan">{totalChecked > 0 ? totalChecked.toLocaleString("id-ID") : "—"}</p>
+            <p className="text-xs text-text-muted">Sighting hari ini</p>
           </div>
           <div className="text-right">
-            <p className="text-2xl font-bold text-accent-red">{flagged}</p>
-            <p className="text-xs text-text-muted">Ditandai bermasalah</p>
+            <p className="text-2xl font-bold text-accent-red">{flagged > 0 ? flagged : "—"}</p>
+            <p className="text-xs text-text-muted">Kendaraan flagged</p>
           </div>
         </div>
       </div>
@@ -219,10 +248,10 @@ export default function ANPRNationalPage() {
       <div className="rounded-xl border border-border bg-bg-secondary overflow-hidden">
         <div className="px-4 py-3 border-b border-border bg-bg-tertiary flex items-center justify-between">
           <span className="text-sm font-semibold text-white flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-accent-green animate-pulse" />
-            Live ANPR Feed — Pengecekan Otomatis dari CCTV
+            <span className={`h-2 w-2 rounded-full animate-pulse ${liveSource === "DB_Live" ? "bg-accent-green" : "bg-accent-amber"}`} />
+            {liveSource === "DB_Live" ? "Live ANPR Feed — Dari Vehicle Sightings DB" : "Live ANPR Feed — Demo Simulation"}
           </span>
-          <span className="text-xs text-text-muted">Update tiap ~8 detik</span>
+          <span className="text-xs text-text-muted">{feedLoading ? "Memuat..." : `${autoFeed.length} entri terbaru`}</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm text-left">

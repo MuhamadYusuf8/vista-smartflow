@@ -1,19 +1,28 @@
 """
-VISTA SmartFlow AI Engine v2.0 — ROADMAP FASE 1
-================================================
-Peningkatan untuk implementasi skala Jakarta:
+VISTA SmartFlow AI Engine v3.0 — Sprint 1: Core Data Pipeline
+=============================================================
+Fitur baru di v3.0:
 
-1. Pendeteksi Ganjil Genap Otomatis
-   - Cek tanggal & jam saat ini → tentukan plat mana yang melanggar
+1. Sighting Logger (BARU)
+   - Setiap kendaraan yang terbaca platnya dikirim ke /api/vehicle-tracking/log
+   - Cooldown 10 detik per plat per kamera (anti-spam)
+   - Memungkinkan Vehicle Tracking lintas CCTV berjalan dengan data riil
+
+2. Traffic Counter (BARU)
+   - Setiap 60 detik, kirim jumlah kendaraan dalam frame ke /api/traffic-metrics
+   - Digunakan oleh Traffic Forecast, ERP, dan Executive Dashboard
+
+3. Pendeteksi Ganjil Genap Otomatis (v2.0)
+   - Cek tanggal & jam saat ini -> tentukan plat mana yang melanggar
    - Hanya aktif di jam 06:00-10:00 & 16:00-21:00, hari kerja
 
-2. Sterilisasi Jalur TransJakarta (Busway)
+4. Sterilisasi Jalur TransJakarta (Busway) (v2.0)
    - Poligon khusus zona busway
-   - Jika kendaraan bukan 'bus' masuk zona → tilang BUSWAY_VIOLATION
+   - Jika kendaraan bukan 'bus' masuk zona -> tilang BUSWAY_VIOLATION
 
-3. ANPR (Automatic Number Plate Recognition)
+5. ANPR (Automatic Number Plate Recognition) (v2.0)
    - Menggunakan EasyOCR (ringan, tidak perlu GPU)
-   - Crop region plat, OCR → kirim ke API
+   - Crop region plat, OCR -> kirim ke API
 
 Cara jalankan:
   pip install ultralytics easyocr opencv-python-headless requests numpy
@@ -76,11 +85,13 @@ print("🚀 Memuat AI Engine VISTA SmartFlow v2.0 ...")
 model = YOLO('yolov8s.pt')
 video_path = 'public/traffic-hd.mp4'
 
-API_URL = "http://localhost:3000/api/violations"
-EVIDENCE_UPLOAD_URL = "http://localhost:3000/api/upload-evidence"
-GANJIL_GENAP_API = "http://localhost:3000/api/ganjil-genap"
-CAMERA_ID = "cctv-bhi-01"
-LOCATION = "Bundaran HI, Jl. MH Thamrin"
+API_URL               = "http://localhost:3000/api/violations"
+EVIDENCE_UPLOAD_URL   = "http://localhost:3000/api/upload-evidence"
+GANJIL_GENAP_API      = "http://localhost:3000/api/ganjil-genap"
+SIGHTING_LOG_URL      = "http://localhost:3000/api/vehicle-tracking/log"
+TRAFFIC_METRICS_URL   = "http://localhost:3000/api/traffic-metrics"
+CAMERA_ID             = "cctv-bhi-01"
+LOCATION              = "Bundaran HI, Jl. MH Thamrin"
 
 cap = cv2.VideoCapture(video_path)
 if not cap.isOpened():
@@ -162,6 +173,116 @@ class GanjilGenapManager:
 
 gage = GanjilGenapManager()
 gage.update()
+
+# ============================================================
+# SPRINT 1 — SIGHTING LOGGER
+# Mencatat setiap kendaraan yang terdeteksi platnya ke DB.
+# Cooldown 10 detik per plat per kamera agar tidak membanjiri DB.
+# ============================================================
+class SightingLogger:
+    """
+    Mengirim log sighting kendaraan ke /api/vehicle-tracking/log.
+    Thread-safe via dictionary timestamp per (plate, camera).
+    """
+    COOLDOWN_SECONDS = 10  # jeda minimal antar sighting untuk plat+kamera yang sama
+
+    def __init__(self):
+        self._last_sent: dict = {}  # key: (plate, camera_id) -> timestamp
+
+    def log(self, plate: str, camera_id: str, vehicle_type: str = "CAR",
+            confidence: float = 0.85, speed_kmh: float | None = None,
+            direction: str | None = None):
+        """
+        Kirim sighting ke API jika belum dalam cooldown.
+        Non-blocking: jika server tidak aktif, diam saja (tidak queue).
+        """
+        key = (plate, camera_id)
+        now = time.time()
+        if now - self._last_sent.get(key, 0) < self.COOLDOWN_SECONDS:
+            return  # masih dalam cooldown
+
+        self._last_sent[key] = now
+        payload = {
+            "license_plate": plate,
+            "camera_id":     camera_id,
+            "vehicle_type":  vehicle_type.upper(),
+            "confidence":    round(confidence, 3),
+            "speed_kmh":     speed_kmh,
+            "direction":     direction,
+        }
+        try:
+            resp = requests.post(SIGHTING_LOG_URL, json=payload, timeout=3)
+            if resp.status_code == 201:
+                flagged = resp.json().get("sighting", {}).get("is_flagged", False)
+                flag_icon = " 🚨 PANTAU!" if flagged else ""
+                print(f"  👁  Sighting: {plate} — Cam:{camera_id}{flag_icon}")
+        except requests.exceptions.ConnectionError:
+            pass  # server belum aktif, abaikan
+        except Exception as e:
+            print(f"  ⚠️  Sighting log gagal: {e}")
+
+
+# ============================================================
+# SPRINT 1 — TRAFFIC COUNTER
+# Mengirim jumlah kendaraan dalam frame ke /api/traffic-metrics
+# setiap 60 detik untuk mendukung Traffic Forecast & ERP.
+# ============================================================
+class TrafficCounter:
+    """
+    Menghitung kendaraan dalam frame dan mengirimnya ke API
+    setiap INTERVAL_SECONDS detik.
+    """
+    INTERVAL_SECONDS = 60
+
+    def __init__(self, camera_id: str):
+        self.camera_id    = camera_id
+        self._count       = 0
+        self._speed_sum   = 0.0
+        self._speed_count = 0
+        self._last_sent   = time.time()
+
+    def record(self, vehicle_count_in_frame: int, avg_speed: float | None = None):
+        """Catat jumlah kendaraan dari satu frame."""
+        self._count = max(self._count, vehicle_count_in_frame)  # ambil nilai maksimum
+        if avg_speed is not None:
+            self._speed_sum   += avg_speed
+            self._speed_count += 1
+
+    def flush_if_due(self):
+        """Kirim statistik ke API jika sudah waktunya (setiap INTERVAL_SECONDS)."""
+        now = time.time()
+        if now - self._last_sent < self.INTERVAL_SECONDS:
+            return
+
+        count       = self._count
+        avg_speed   = round(self._speed_sum / self._speed_count, 1) if self._speed_count > 0 else None
+        congestion  = round(min(1.0, max(0.0, (count - 3) / 25)), 2)
+
+        # Reset counter
+        self._count       = 0
+        self._speed_sum   = 0.0
+        self._speed_count = 0
+        self._last_sent   = now
+
+        payload = {
+            "camera_id":     self.camera_id,
+            "vehicle_count": count,
+            "avg_speed_kmh": avg_speed,
+            "congestion":    congestion,
+        }
+        try:
+            resp = requests.post(TRAFFIC_METRICS_URL, json=payload, timeout=3)
+            if resp.status_code == 201:
+                level = "LANCAR" if congestion < 0.3 else "PADAT" if congestion < 0.55 else "MACET" if congestion < 0.8 else "MACET TOTAL"
+                print(f"  📊 Traffic Metrics: {count} kendaraan | Kemacetan: {level} ({congestion:.0%}) | Cam:{self.camera_id}")
+        except requests.exceptions.ConnectionError:
+            pass
+        except Exception as e:
+            print(f"  ⚠️  Traffic metrics gagal: {e}")
+
+
+sighting_logger  = SightingLogger()
+traffic_counter  = TrafficCounter(CAMERA_ID)
 
 # ============================================================
 # FASE 1B: ZONA BUSWAY — Sterilisasi Jalur TransJakarta
@@ -282,9 +403,10 @@ def read_plate_ocr(frame: np.ndarray, box: tuple) -> str | None:
     best_text  = None
     best_score = 0
 
+    found_good = False
     for crop in regions:
-        if crop.size == 0:
-            continue
+        if crop.size == 0 or found_good:
+            break
         for processed in _preprocess_plate(crop):
             try:
                 res = ocr_reader.readtext(
@@ -306,6 +428,11 @@ def read_plate_ocr(frame: np.ndarray, box: tuple) -> str | None:
                 if score > best_score:
                     best_score = score
                     best_text  = cleaned[:12]
+                # ✅ OPTIMASI: Berhenti lebih awal jika plat sudah sangat valid
+                # (format cocok regex plat Indonesia, ada huruf + angka, panjang ideal)
+                if best_score >= 7:
+                    found_good = True
+                    break
             except Exception:
                 continue
 
@@ -320,14 +447,48 @@ def generate_plate_unknown(track_id: int) -> str:
     return f"TDK-TERBACA-{track_id:04d}"
 
 
-# ============================================================
-# MEMORI ANTI-SPAM & TIMER
-# ============================================================
-vehicle_timers = {}
-ticketed_vehicles = set()
-ticketed_plates = {}
+def get_cached_plate(frame: np.ndarray, box: tuple, track_id: int) -> str | None:
+    """
+    ✅ OPTIMASI UTAMA: Baca plat dengan smart caching per track_id.
 
-MAX_STOP_SECONDS = 10
+    Strategi:
+    - Jika sebelumnya BERHASIL dibaca  → langsung pakai cache (hemat 16 OCR calls).
+    - Jika sebelumnya GAGAL (None)     → retry setelah PLATE_CACHE_RETRY_SECONDS.
+    - Jika cache sudah terlalu lama    → refresh setelah PLATE_CACHE_REREAD_SECONDS.
+    """
+    now    = time.time()
+    cached = plate_cache.get(track_id)
+
+    if cached is not None:
+        cached_text, cached_time = cached
+        if cached_text is not None:
+            # Sudah punya plat yang valid — pakai sampai REREAD timeout
+            if now - cached_time < PLATE_CACHE_REREAD_SECONDS:
+                return cached_text
+        else:
+            # Sebelumnya gagal baca — tunggu RETRY timeout sebelum coba lagi
+            if now - cached_time < PLATE_CACHE_RETRY_SECONDS:
+                return None
+
+    result = read_plate_ocr(frame, box)
+    plate_cache[track_id] = (result, now)
+    return result
+
+
+# ============================================================
+# MEMORI ANTI-SPAM, TIMER & PLATE CACHE
+# ============================================================
+vehicle_timers    = {}
+ticketed_vehicles = set()
+ticketed_plates   = {}
+
+# ✅ OPTIMASI: Cache hasil OCR per track_id agar tidak OCR ulang setiap frame.
+# Format: { track_id: (plate_str | None, timestamp_last_attempt) }
+plate_cache: dict[int, tuple[str | None, float]] = {}
+PLATE_CACHE_REREAD_SECONDS = 30   # refresh cache setelah 30 detik
+PLATE_CACHE_RETRY_SECONDS  = 5    # retry lebih cepat jika sebelumnya gagal baca
+
+MAX_STOP_SECONDS       = 10
 PLATE_COOLDOWN_SECONDS = 86400
 
 
@@ -466,16 +627,40 @@ print(f"  ✓ Ganjil Genap — Aktif: {gage.is_enforced}, Dilarang: {gage.restri
 print(f"  ✓ ANPR: {'EasyOCR Aktif' if anpr_available else 'Mode Demo'}")
 print("="*60 + "\n")
 
-frame_count = 0
+frame_count      = 0
+last_annotated   = None  # frame terakhir yang sudah dianotasi (untuk frame skip display)
+
+# ✅ OPTIMASI: Proses YOLO inference setiap N frame.
+# Frame yang di-skip tetap ditampilkan dari cache last_annotated agar display mulus.
+# N=2 → hemat ~50% beban CPU untuk inference tanpa kehilangan informasi tracking
+# (BoT-SORT menggunakan Kalman Filter untuk memprediksi posisi di frame yang di-skip).
+SKIP_FRAMES = 2
 
 while cap.isOpened():
     success, frame = cap.read()
     if not success:
-        print("Video selesai. Restart...")
+        print("Video selesai. Restart...", flush=True)
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Bersihkan cache track yang sudah tidak relevan saat video restart
+        plate_cache.clear()
         continue
 
     frame_count += 1
+
+    # ── Frame skipping: tampilkan frame sebelumnya, lewati inference YOLO ──
+    if frame_count % SKIP_FRAMES != 0:
+        if last_annotated is not None:
+            frame_resized = cv2.resize(last_annotated, (1024, 576))
+            if GUI_AVAILABLE:
+                cv2.imshow("VISTA AI Engine v3.0 — SmartFlow Jakarta", frame_resized)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+            else:
+                now_ts = time.time()
+                if now_ts - last_preview_save >= 1.0:
+                    cv2.imwrite("output/preview_latest.jpg", frame_resized)
+                    last_preview_save = now_ts
+        continue  # skip ke frame berikutnya tanpa memanggil YOLO
 
     # Update Ganjil Genap status setiap 60 detik
     if frame_count % 1800 == 0:  # ~60 detik pada 30fps
@@ -519,13 +704,21 @@ while cap.isOpened():
         if r.boxes.id is None:
             continue
 
-        boxes = r.boxes.xyxy.cpu().numpy()
-        track_ids = r.boxes.id.cpu().numpy()
-        clss = r.boxes.cls.cpu().numpy()
+        boxes      = r.boxes.xyxy.cpu().numpy()
+        track_ids  = r.boxes.id.cpu().numpy()
+        clss       = r.boxes.cls.cpu().numpy()
+        confs      = r.boxes.conf.cpu().numpy()
         current_time = time.time()
 
-        for box, track_id, cls in zip(boxes, track_ids, clss):
-            track_id = int(track_id)
+        # ── SPRINT 1: Traffic Counter — hitung semua kendaraan dalam frame ──
+        vehicle_count_frame = sum(
+            1 for c in clss if model.names[int(c)] in ['car', 'truck', 'bus', 'motorcycle']
+        )
+        traffic_counter.record(vehicle_count_frame)
+        traffic_counter.flush_if_due()
+
+        for box, track_id, cls, conf in zip(boxes, track_ids, clss, confs):
+            track_id   = int(track_id)
             class_name = model.names[int(cls)]
 
             x1, y1, x2, y2 = box
@@ -553,8 +746,8 @@ while cap.isOpened():
                             (0, 165, 255), 2)
 
                 if time_spent >= MAX_STOP_SECONDS and track_id not in ticketed_vehicles:
-                    # ANPR
-                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
+                    # ✅ ANPR via cache — tidak OCR ulang jika sudah pernah dibaca
+                    plate = get_cached_plate(frame, box, track_id) or generate_plate_unknown(track_id)
 
                     last_time = ticketed_plates.get(plate, 0)
                     if current_time - last_time < PLATE_COOLDOWN_SECONDS:
@@ -578,7 +771,8 @@ while cap.isOpened():
             if is_in_busway_zone and class_name != 'bus':
                 busway_key = f"busway_{track_id}"
                 if busway_key not in ticketed_vehicles:
-                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
+                    # ✅ ANPR via cache
+                    plate = get_cached_plate(frame, box, track_id) or generate_plate_unknown(track_id)
                     last_time = ticketed_plates.get(plate + "_busway", 0)
 
                     if current_time - last_time > 300:  # cooldown 5 menit per plat
@@ -598,7 +792,8 @@ while cap.isOpened():
             if gage.is_enforced and class_name in ['car', 'truck']:
                 gage_key = f"gage_{track_id}"
                 if gage_key not in ticketed_vehicles:
-                    plate = read_plate_ocr(frame, box) or generate_plate_unknown(track_id)
+                    # ✅ ANPR via cache
+                    plate = get_cached_plate(frame, box, track_id) or generate_plate_unknown(track_id)
                     if gage.is_plate_violating(plate):
                         last_time = ticketed_plates.get(plate + "_gage", 0)
                         if current_time - last_time > 3600:  # cooldown 1 jam
@@ -610,11 +805,25 @@ while cap.isOpened():
                             ticketed_plates[plate + "_gage"] = current_time
                             ticketed_vehicles.add(gage_key)
 
+            # ── SPRINT 1: Sighting Logger — catat semua kendaraan yang terbaca platnya ──
+            # ✅ OPTIMASI: Gunakan cache yang sudah ada — TIDAK memanggil OCR lagi.
+            # Jika cache belum ada untuk track_id ini, get_cached_plate akan OCR sekali
+            # dan menyimpan hasilnya untuk dipakai di cek pelanggaran berikutnya juga.
+            plate_for_sighting = get_cached_plate(frame, box, track_id)
+            if plate_for_sighting and not plate_for_sighting.startswith("TDK-TERBACA"):
+                sighting_logger.log(
+                    plate        = plate_for_sighting,
+                    camera_id    = CAMERA_ID,
+                    vehicle_type = class_name.upper() if class_name in ['car', 'truck', 'bus', 'motorcycle'] else "OTHER",
+                    confidence   = float(conf),
+                )
+
     # Resize untuk display / simpan preview
-    frame_resized = cv2.resize(annotated_frame, (1024, 576))
+    last_annotated = annotated_frame  # simpan untuk dipakai di frame skip
+    frame_resized  = cv2.resize(annotated_frame, (1024, 576))
 
     if GUI_AVAILABLE:
-        cv2.imshow("VISTA AI Engine v2.0 — SmartFlow Jakarta", frame_resized)
+        cv2.imshow("VISTA AI Engine v3.0 — SmartFlow Jakarta", frame_resized)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
     else:
@@ -623,6 +832,16 @@ while cap.isOpened():
         if now_ts - last_preview_save >= 1.0:
             cv2.imwrite("output/preview_latest.jpg", frame_resized)
             last_preview_save = now_ts
+
+    # ✅ Bersihkan cache plate untuk track_id yang sudah lama tidak muncul
+    # agar memori tidak terus membesar. Jalankan setiap ~300 frame inference.
+    if frame_count % (SKIP_FRAMES * 300) == 0 and plate_cache:
+        active_ids = set(int(tid) for tid in track_ids) if 'track_ids' in dir() else set()
+        stale_ids  = [tid for tid in list(plate_cache) if tid not in active_ids]
+        for tid in stale_ids:
+            plate_cache.pop(tid, None)
+        if stale_ids:
+            print(f"  🧹 Cache: hapus {len(stale_ids)} track_id lama. Sisa: {len(plate_cache)}", flush=True)
 
 cap.release()
 if GUI_AVAILABLE:

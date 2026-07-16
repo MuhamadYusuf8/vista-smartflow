@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Navigation, AlertTriangle, Clock, RefreshCw,
-  TrendingUp, TrendingDown, Minus, MapPin, Zap,
+  TrendingUp, TrendingDown, Minus, MapPin, Zap, Gauge,
 } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { cn } from "@/lib/utils";
@@ -18,6 +18,8 @@ interface RoadForecast {
     color: string;
     speedEstimateKmh: number;
     travelTimeMultiplier: string;
+    liveSpeed: number | null;
+    liveCount: number | null;
   };
   forecast: Array<{
     time: string;
@@ -33,12 +35,15 @@ interface RoadForecast {
 
 interface ForecastData {
   timestamp: string;
+  _source?: string;
+  _dataPoints?: number;
   jakartaOverall: {
     avgCongestionScore: number;
     level: CongestionLevel;
     color: string;
     recommendation: string;
     recentViolationsLastHour: number;
+    cityAvgSpeedKmh?: number | null;
   };
   roads: RoadForecast[];
 }
@@ -91,14 +96,29 @@ export default function TrafficForecastPage() {
             Forecasting lalu lintas Jakarta berbasis volume kendaraan dan data pelanggaran
           </p>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-white hover:bg-border"
-        >
-          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-          Update
-        </button>
+        <div className="flex items-center gap-3">
+          {/* Source badge */}
+          {data?._source && (
+            <span className={cn(
+              "rounded-full px-3 py-1 text-xs font-bold border",
+              data._source === "DB_Live"
+                ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+            )}>
+              {data._source === "DB_Live"
+                ? `🟢 Data Live DB (${data._dataPoints} poin)`
+                : "🟡 Model Prediksi Murni"}
+            </span>
+          )}
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-white hover:bg-border"
+          >
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            Update
+          </button>
+        </div>
       </div>
 
       {/* Overall Jakarta Status */}
@@ -176,7 +196,13 @@ export default function TrafficForecastPage() {
                 </span>
                 <div className="pb-1 text-text-muted text-xs">
                   <div>{f.current.level}</div>
-                  <div>~{f.current.speedEstimateKmh} km/h</div>
+                  <div className="flex items-center gap-1">
+                    <Gauge className="h-3 w-3" />
+                    {f.current.liveSpeed !== null && f.current.liveSpeed !== undefined
+                      ? <span className="text-accent-cyan font-semibold">{f.current.liveSpeed} km/h <span className="text-text-muted font-normal">(live)</span></span>
+                      : <span>~{f.current.speedEstimateKmh} km/h</span>
+                    }
+                  </div>
                 </div>
               </div>
 

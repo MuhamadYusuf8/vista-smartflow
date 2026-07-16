@@ -9,11 +9,11 @@ export default async function AuthLayout({
   const session = await getAuthSession();
 
   if (session) {
-    redirect("/");
+    redirect("/"); // dashboard utama sudah handle proteksi route
   }
 
   return (
-    <div className="flex min-h-screen bg-bg-primary">
+    <div className="min-h-screen">
       {children}
     </div>
   );

@@ -40,6 +40,8 @@ interface ERPData {
   summary: ERPSummary;
   zones: ERPZone[];
   historicalData: Array<{ date: string; revenue: number; vehicles: number }>;
+  _source?: string;
+  _dataPoints?: number;
 }
 
 function formatRupiah(n: number): string {
@@ -90,14 +92,28 @@ export default function ERPPage() {
             Pemantauan potensi Pendapatan Asli Daerah (PAD) dari tarif jalan raya Jakarta
           </p>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-white hover:bg-border"
-        >
-          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          {data?._source && (
+            <span className={cn(
+              "rounded-full px-3 py-1 text-xs font-bold border",
+              data._source === "DB_Live"
+                ? "bg-accent-green/10 border-accent-green/30 text-accent-green"
+                : "bg-accent-amber/10 border-accent-amber/30 text-accent-amber"
+            )}>
+              {data._source === "DB_Live"
+                ? `🟢 Live DB (${data._dataPoints} poin traffic)`
+                : "🟡 Model Simulasi"}
+            </span>
+          )}
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-white hover:bg-border"
+          >
+            <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}

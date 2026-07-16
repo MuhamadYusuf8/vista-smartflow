@@ -1,5 +1,6 @@
 "use client";
 
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -53,8 +54,33 @@ const GROUP_ORDER = ["Utama", "Pilot Koridor", "Smart City", "Kebijakan Jakarta"
 export function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const [pendingCount, setPendingCount] = useState(0);
 
   const userRole = session?.user?.role || "VIEWER";
+
+  // Fetch live pending violations count
+  useEffect(() => {
+    async function fetchPending() {
+      try {
+        const { createClient } = await import("@supabase/supabase-js");
+        const sb = createClient(
+          process.env.NEXT_PUBLIC_SUPABASE_URL!,
+          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        );
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const { count } = await sb
+          .from("violations")
+          .select("*", { count: "exact", head: true })
+          .eq("status", "PENDING")
+          .gte("created_at", today.toISOString());
+        if (count !== null) setPendingCount(count);
+      } catch { /* silent */ }
+    }
+    fetchPending();
+    const interval = setInterval(fetchPending, 60000);
+    return () => clearInterval(interval);
+  }, []);
   
   return (
     <aside className="fixed left-0 top-0 z-40 h-screen w-72 flex-col border-r border-border bg-bg-secondary hidden md:flex">
@@ -129,8 +155,11 @@ export function Sidebar() {
                       </div>
                       {"badge" in item && item.badge && (
                         <span className="inline-flex items-center rounded-full bg-accent-red/10 px-2 py-0.5 text-xs font-medium text-accent-red ring-1 ring-inset ring-accent-red/20">
-                          <div className="w-1.5 h-1.5 rounded-full bg-accent-red mr-1 animate-pulse" />
-                          Live
+                          {pendingCount > 0 ? (
+                            <span className="font-bold">{pendingCount > 99 ? "99+" : pendingCount}</span>
+                          ) : (
+                            <><div className="w-1.5 h-1.5 rounded-full bg-accent-red mr-1 animate-pulse" />Live</>
+                          )}
                         </span>
                       )}
                     </Link>

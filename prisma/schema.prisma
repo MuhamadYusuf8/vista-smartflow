@@ -28,16 +28,54 @@ model SystemLog {
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 model cameras {
-  id         String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name       String
-  location   String
-  lat        Float
-  lng        Float
-  status     String?      @default("ACTIVE")
-  stream_url String?
-  created_at DateTime?    @default(now()) @db.Timestamptz(6)
-  updated_at DateTime?    @default(now()) @db.Timestamptz(6)
-  violations violations[]
+  id               String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name             String
+  location         String
+  lat              Float
+  lng              Float
+  status           String?             @default("ACTIVE")
+  stream_url       String?
+  created_at       DateTime?           @default(now()) @db.Timestamptz(6)
+  updated_at       DateTime?           @default(now()) @db.Timestamptz(6)
+  violations       violations[]
+  vehicle_sightings vehicle_sightings[]
+  traffic_metrics  traffic_metrics[]
+}
+
+/// Jejak setiap kendaraan yang tertangkap kamera — untuk Vehicle Tracking lintas CCTV.
+/// Dikirim oleh AI Engine setiap kali berhasil membaca plat nomor (cooldown 10 detik/plat/kamera).
+model vehicle_sightings {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  license_plate String
+  camera_id     String?   @db.Uuid
+  vehicle_type  String?   @default("CAR")
+  confidence    Float     @default(0.0)
+  speed_kmh     Float?
+  direction     String?
+  snapshot_url  String?
+  is_flagged    Boolean   @default(false)
+  flag_reason   String?
+  created_at    DateTime  @default(now()) @db.Timestamptz(6)
+  cameras       cameras?  @relation(fields: [camera_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([license_plate, created_at(sort: Desc)], map: "idx_sightings_plate_time")
+  @@index([camera_id, created_at(sort: Desc)],    map: "idx_sightings_camera_time")
+  @@index([created_at(sort: Desc)],               map: "idx_sightings_created")
+}
+
+/// Volume lalu lintas per kamera per jam — untuk Traffic Forecast, ERP, dan Executive Dashboard.
+/// Dikirim oleh AI Engine setiap 60 detik sebagai agregat jumlah kendaraan dalam frame.
+model traffic_metrics {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  camera_id     String?   @db.Uuid
+  recorded_at   DateTime  @default(now()) @db.Timestamptz(6)
+  vehicle_count Int       @default(0)
+  avg_speed_kmh Float?
+  congestion    Float?    /// 0.0 (lancar) – 1.0 (macet total)
+  cameras       cameras?  @relation(fields: [camera_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([camera_id, recorded_at(sort: Desc)], map: "idx_traffic_camera_time")
+  @@index([recorded_at(sort: Desc)],            map: "idx_traffic_recorded")
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
